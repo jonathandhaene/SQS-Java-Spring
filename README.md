@@ -28,7 +28,7 @@ Add the dependency to your Maven `pom.xml`:
 
 ```xml
 <dependency>
-    <groupId>com.azure.servicebus.extended</groupId>
+    <groupId>com.azure.servicebus.largemessage</groupId>
     <artifactId>azure-servicebus-large-message-client</artifactId>
     <version>1.0.0-SNAPSHOT</version>
 </dependency>
@@ -48,7 +48,7 @@ azure:
   storage:
     connection-string: ${AZURE_STORAGE_CONNECTION_STRING}
     container-name: ${AZURE_STORAGE_CONTAINER_NAME:large-messages}
-  extended-client:
+  large-message-client:
     message-size-threshold: 262144    # 256 KB
     always-through-blob: false
     cleanup-blob-on-delete: true
@@ -58,14 +58,14 @@ azure:
 
 ```java
 @Autowired
-private AzureServiceBusExtendedClient client;
+private AzureServiceBusLargeMessageClient client;
 
 // Send a message - automatically offloaded if too large
 client.sendMessage("Your message content here");
 
 // Receive messages - automatically resolved from blob storage
-List<ExtendedServiceBusMessage> messages = client.receiveMessages(10);
-for (ExtendedServiceBusMessage message : messages) {
+List<LargeServiceBusMessage> messages = client.receiveMessages(10);
+for (LargeServiceBusMessage message : messages) {
     String body = message.getBody();
     
     // Clean up blob payload if needed

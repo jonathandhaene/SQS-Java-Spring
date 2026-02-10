@@ -16,7 +16,7 @@ azure:
   storage:
     connection-string: ${AZURE_STORAGE_CONNECTION_STRING}
     container-name: ${AZURE_STORAGE_CONTAINER_NAME:large-messages}
-  extended-client:
+  large-message-client:
     message-size-threshold: 262144    # 256 KB
     always-through-blob: false
     cleanup-blob-on-delete: true
@@ -36,7 +36,7 @@ Messages exceeding the configured size threshold (default 256 KB) are automatica
 
 ```java
 @Autowired
-private AzureServiceBusExtendedClient client;
+private AzureServiceBusLargeMessageClient client;
 
 // Small message — sent directly via Service Bus
 client.sendMessage("Small message");
@@ -56,9 +56,9 @@ client.sendMessage(largeMessage, properties);
 Payloads stored in Blob Storage are transparently resolved back to the original message body on receive.
 
 ```java
-List<ExtendedServiceBusMessage> messages = client.receiveMessages(10);
+List<LargeServiceBusMessage> messages = client.receiveMessages(10);
 
-for (ExtendedServiceBusMessage message : messages) {
+for (LargeServiceBusMessage message : messages) {
     // Body is automatically resolved from blob if needed
     String body = message.getBody();
 
@@ -85,7 +85,7 @@ Map<String, Object> properties = Map.of("source", "batch-job");
 client.sendMessageBatch(messageBodies, properties);
 
 // Batch delete blob payloads
-List<ExtendedServiceBusMessage> processedMessages = ...;
+List<LargeServiceBusMessage> processedMessages = ...;
 client.deletePayloadBatch(processedMessages);
 ```
 
@@ -96,7 +96,7 @@ Transient failures are automatically retried with exponential backoff and jitter
 **Configuration:**
 ```yaml
 azure:
-  extended-client:
+  large-message-client:
     retry-max-attempts: 3
     retry-backoff-millis: 1000
     retry-backoff-multiplier: 2.0
@@ -121,7 +121,7 @@ Failed messages are automatically moved to the Dead Letter Queue when `deadLette
 **Configuration:**
 ```yaml
 azure:
-  extended-client:
+  large-message-client:
     dead-letter-on-failure: true
     dead-letter-reason: "ProcessingFailure"
     max-delivery-count: 10
@@ -144,10 +144,10 @@ client.processMessages(
 
 **Receiving from the DLQ:**
 ```java
-List<ExtendedServiceBusMessage> dlqMessages =
+List<LargeServiceBusMessage> dlqMessages =
     client.receiveDeadLetterMessages(connectionString, queueName, 10);
 
-for (ExtendedServiceBusMessage msg : dlqMessages) {
+for (LargeServiceBusMessage msg : dlqMessages) {
     System.out.println("Dead-letter reason: " + msg.getDeadLetterReason());
     System.out.println("Description: " + msg.getDeadLetterDescription());
     System.out.println("Delivery count: " + msg.getDeliveryCount());
@@ -178,10 +178,10 @@ Defer a message for later retrieval by sequence number.
 client.deferMessage(receivedMessage);
 
 // Retrieve a deferred message by sequence number
-ExtendedServiceBusMessage deferred = client.receiveDeferredMessage(sequenceNumber);
+LargeServiceBusMessage deferred = client.receiveDeferredMessage(sequenceNumber);
 
 // Retrieve multiple deferred messages
-List<ExtendedServiceBusMessage> deferredBatch =
+List<LargeServiceBusMessage> deferredBatch =
     client.receiveDeferredMessages(List.of(seq1, seq2, seq3));
 ```
 
@@ -239,17 +239,17 @@ client.processMessages(
 | `azure.servicebus.queue-name` | `my-queue` | Queue name |
 | `azure.storage.connection-string` | *required* | Blob Storage connection string |
 | `azure.storage.container-name` | `large-messages` | Container for large payloads |
-| `azure.extended-client.message-size-threshold` | `262144` (256 KB) | Size threshold for offloading |
-| `azure.extended-client.always-through-blob` | `false` | Force all messages through blob |
-| `azure.extended-client.cleanup-blob-on-delete` | `true` | Auto-delete blob on message delete |
-| `azure.extended-client.blob-key-prefix` | `""` | Prefix for blob names |
-| `azure.extended-client.retry-max-attempts` | `3` | Maximum retry attempts |
-| `azure.extended-client.retry-backoff-millis` | `1000` | Initial backoff delay (ms) |
-| `azure.extended-client.retry-backoff-multiplier` | `2.0` | Backoff multiplier |
-| `azure.extended-client.retry-max-backoff-millis` | `30000` | Maximum backoff delay cap (ms) |
-| `azure.extended-client.dead-letter-on-failure` | `true` | Dead-letter messages on failure |
-| `azure.extended-client.dead-letter-reason` | `"ProcessingFailure"` | Default dead-letter reason |
-| `azure.extended-client.max-delivery-count` | `10` | Informational only |
+| `azure.large-message-client.message-size-threshold` | `262144` (256 KB) | Size threshold for offloading |
+| `azure.large-message-client.always-through-blob` | `false` | Force all messages through blob |
+| `azure.large-message-client.cleanup-blob-on-delete` | `true` | Auto-delete blob on message delete |
+| `azure.large-message-client.blob-key-prefix` | `""` | Prefix for blob names |
+| `azure.large-message-client.retry-max-attempts` | `3` | Maximum retry attempts |
+| `azure.large-message-client.retry-backoff-millis` | `1000` | Initial backoff delay (ms) |
+| `azure.large-message-client.retry-backoff-multiplier` | `2.0` | Backoff multiplier |
+| `azure.large-message-client.retry-max-backoff-millis` | `30000` | Maximum backoff delay cap (ms) |
+| `azure.large-message-client.dead-letter-on-failure` | `true` | Dead-letter messages on failure |
+| `azure.large-message-client.dead-letter-reason` | `"ProcessingFailure"` | Default dead-letter reason |
+| `azure.large-message-client.max-delivery-count` | `10` | Informational only |
 
 ## Conclusion
 This guide covers the key features and usage patterns of the Azure Service Bus Large Message Client. For more details, refer to the [README](README.md) and the example application in the repository.
