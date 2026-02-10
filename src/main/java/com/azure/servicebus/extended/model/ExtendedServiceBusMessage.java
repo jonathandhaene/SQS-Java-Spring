@@ -12,6 +12,9 @@ public class ExtendedServiceBusMessage {
     private final Map<String, Object> applicationProperties;
     private final boolean payloadFromBlob;
     private final BlobPointer blobPointer;
+    private final String deadLetterReason;
+    private final String deadLetterDescription;
+    private final long deliveryCount;
 
     public ExtendedServiceBusMessage(
             String messageId,
@@ -19,11 +22,26 @@ public class ExtendedServiceBusMessage {
             Map<String, Object> applicationProperties,
             boolean payloadFromBlob,
             BlobPointer blobPointer) {
+        this(messageId, body, applicationProperties, payloadFromBlob, blobPointer, null, null, 0);
+    }
+
+    public ExtendedServiceBusMessage(
+            String messageId,
+            String body,
+            Map<String, Object> applicationProperties,
+            boolean payloadFromBlob,
+            BlobPointer blobPointer,
+            String deadLetterReason,
+            String deadLetterDescription,
+            long deliveryCount) {
         this.messageId = messageId;
         this.body = body;
         this.applicationProperties = applicationProperties;
         this.payloadFromBlob = payloadFromBlob;
         this.blobPointer = blobPointer;
+        this.deadLetterReason = deadLetterReason;
+        this.deadLetterDescription = deadLetterDescription;
+        this.deliveryCount = deliveryCount;
     }
 
     /**
@@ -71,6 +89,33 @@ public class ExtendedServiceBusMessage {
         return blobPointer;
     }
 
+    /**
+     * Gets the dead-letter reason if the message was dead-lettered.
+     *
+     * @return the dead-letter reason, or null if not dead-lettered
+     */
+    public String getDeadLetterReason() {
+        return deadLetterReason;
+    }
+
+    /**
+     * Gets the dead-letter description if the message was dead-lettered.
+     *
+     * @return the dead-letter description, or null if not dead-lettered
+     */
+    public String getDeadLetterDescription() {
+        return deadLetterDescription;
+    }
+
+    /**
+     * Gets the number of times this message has been delivered.
+     *
+     * @return the delivery count
+     */
+    public long getDeliveryCount() {
+        return deliveryCount;
+    }
+
     @Override
     public String toString() {
         return "ExtendedServiceBusMessage{" +
@@ -78,6 +123,8 @@ public class ExtendedServiceBusMessage {
                 ", bodyLength=" + (body != null ? body.length() : 0) +
                 ", payloadFromBlob=" + payloadFromBlob +
                 ", blobPointer=" + blobPointer +
+                ", deliveryCount=" + deliveryCount +
+                ", deadLetterReason='" + deadLetterReason + '\'' +
                 '}';
     }
 }

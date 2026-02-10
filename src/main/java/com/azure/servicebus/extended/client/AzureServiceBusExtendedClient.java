@@ -1,10 +1,13 @@
 package com.azure.servicebus.extended.client;
 
 import com.azure.messaging.servicebus.*;
+import com.azure.messaging.servicebus.models.DeadLetterOptions;
+import com.azure.messaging.servicebus.models.SubQueue;
 import com.azure.servicebus.extended.config.ExtendedClientConfiguration;
 import com.azure.servicebus.extended.model.BlobPointer;
 import com.azure.servicebus.extended.model.ExtendedServiceBusMessage;
 import com.azure.servicebus.extended.store.BlobPayloadStore;
+import com.azure.servicebus.extended.util.RetryHandler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -27,6 +30,7 @@ public class AzureServiceBusExtendedClient implements AutoCloseable {
     private final ServiceBusReceiverClient receiverClient;
     private final BlobPayloadStore payloadStore;
     private final ExtendedClientConfiguration config;
+    private final RetryHandler retryHandler;
     private ServiceBusProcessorClient processorClient;
 
     /**
@@ -44,6 +48,12 @@ public class AzureServiceBusExtendedClient implements AutoCloseable {
             ExtendedClientConfiguration config) {
         this.payloadStore = payloadStore;
         this.config = config;
+        this.retryHandler = new RetryHandler(
+                config.getRetryMaxAttempts(),
+                config.getRetryBackoffMillis(),
+                config.getRetryBackoffMultiplier(),
+                config.getRetryMaxBackoffMillis()
+        );
 
         ServiceBusClientBuilder builder = new ServiceBusClientBuilder()
                 .connectionString(connectionString);
@@ -76,6 +86,12 @@ public class AzureServiceBusExtendedClient implements AutoCloseable {
         this.receiverClient = receiverClient;
         this.payloadStore = payloadStore;
         this.config = config;
+        this.retryHandler = new RetryHandler(
+                config.getRetryMaxAttempts(),
+                config.getRetryBackoffMillis(),
+                config.getRetryBackoffMultiplier(),
+                config.getRetryMaxBackoffMillis()
+        );
         logger.info("AzureServiceBusExtendedClient initialized with provided clients");
     }
 
@@ -95,7 +111,7 @@ public class AzureServiceBusExtendedClient implements AutoCloseable {
      * @param applicationProperties custom application properties
      */
     public void sendMessage(String messageBody, Map<String, Object> applicationProperties) {
-        try {
+        retryHandler.executeWithRetry(() -> {
             int payloadSize = messageBody.getBytes(StandardCharsets.UTF_8).length;
             boolean shouldOffload = config.isAlwaysThroughBlob() || 
                                    payloadSize > config.getMessageSizeThreshold();
@@ -109,8 +125,10 @@ public class AzureServiceBusExtendedClient implements AutoCloseable {
                 // Generate unique blob name
                 String blobName = config.getBlobKeyPrefix() + UUID.randomUUID().toString();
                 
-                // Store payload in blob
-                BlobPointer pointer = payloadStore.storePayload(blobName, messageBody);
+                // Store payload in blob with retry
+                BlobPointer pointer = retryHandler.executeWithRetry(() -> 
+                    payloadStore.storePayload(blobName, messageBody)
+                );
                 
                 // Create message with blob pointer as body
                 message = new ServiceBusMessage(pointer.toJson());
@@ -132,10 +150,7 @@ public class AzureServiceBusExtendedClient implements AutoCloseable {
 
             senderClient.sendMessage(message);
             logger.debug("Message sent successfully");
-        } catch (Exception e) {
-            logger.error("Failed to send message", e);
-            throw new RuntimeException("Failed to send message", e);
-        }
+        });
     }
 
     /**
@@ -216,9 +231,28 @@ public class AzureServiceBusExtendedClient implements AutoCloseable {
                 .queueName(queueName)
                 .processMessage(context -> {
                     ServiceBusReceivedMessage message = context.getMessage();
-                    ExtendedServiceBusMessage extendedMessage = processReceivedMessage(message);
-                    messageHandler.accept(extendedMessage);
-                    context.complete();
+                    try {
+                        ExtendedServiceBusMessage extendedMessage = processReceivedMessage(message);
+                        messageHandler.accept(extendedMessage);
+                        context.complete();
+                    } catch (Exception e) {
+                        logger.error("Error processing message: {}", message.getMessageId(), e);
+                        if (config.isDeadLetterOnFailure()) {
+                            try {
+                                context.deadLetter(
+                                    new DeadLetterOptions()
+                                        .setDeadLetterReason(config.getDeadLetterReason())
+                                        .setDeadLetterErrorDescription("Processing failed: " + e.getMessage())
+                                );
+                                logger.info("Message {} dead-lettered due to processing failure", message.getMessageId());
+                            } catch (Exception dlqEx) {
+                                logger.error("Failed to dead-letter message: {}", message.getMessageId(), dlqEx);
+                                throw dlqEx;
+                            }
+                        } else {
+                            throw e;
+                        }
+                    }
                 })
                 .processError(errorHandler)
                 .buildProcessorClient();
@@ -242,19 +276,19 @@ public class AzureServiceBusExtendedClient implements AutoCloseable {
 
         if (isFromBlob) {
             logger.debug("Message contains blob pointer. Resolving payload...");
-            try {
-                blobPointer = BlobPointer.fromJson(body);
-                body = payloadStore.getPayload(blobPointer);
-                
-                // Remove internal marker properties
-                appProperties.remove(ExtendedClientConfiguration.BLOB_POINTER_MARKER);
-                appProperties.remove(ExtendedClientConfiguration.RESERVED_ATTRIBUTE_NAME);
-                
-                logger.debug("Payload resolved from blob: {}", blobPointer);
-            } catch (Exception e) {
-                logger.error("Failed to resolve blob payload", e);
-                throw new RuntimeException("Failed to resolve blob payload", e);
-            }
+            blobPointer = BlobPointer.fromJson(body);
+            
+            // Use retry for blob retrieval
+            String blobPointerJson = body;
+            body = retryHandler.executeWithRetry(() -> 
+                payloadStore.getPayload(BlobPointer.fromJson(blobPointerJson))
+            );
+            
+            // Remove internal marker properties
+            appProperties.remove(ExtendedClientConfiguration.BLOB_POINTER_MARKER);
+            appProperties.remove(ExtendedClientConfiguration.RESERVED_ATTRIBUTE_NAME);
+            
+            logger.debug("Payload resolved from blob: {}", blobPointer);
         }
 
         return new ExtendedServiceBusMessage(
@@ -262,7 +296,10 @@ public class AzureServiceBusExtendedClient implements AutoCloseable {
                 body,
                 appProperties,
                 isFromBlob,
-                blobPointer
+                blobPointer,
+                message.getDeadLetterReason(),
+                message.getDeadLetterErrorDescription(),
+                message.getDeliveryCount()
         );
     }
 
@@ -289,12 +326,89 @@ public class AzureServiceBusExtendedClient implements AutoCloseable {
 
         try {
             logger.debug("Deleting blob payload: {}", message.getBlobPointer());
-            payloadStore.deletePayload(message.getBlobPointer());
+            retryHandler.executeWithRetry(() -> {
+                payloadStore.deletePayload(message.getBlobPointer());
+            });
             logger.debug("Blob payload deleted successfully");
         } catch (Exception e) {
-            logger.error("Failed to delete blob payload", e);
-            // Don't throw exception - cleanup failure shouldn't break message processing
+            logger.error("Failed to delete blob payload after retries", e);
         }
+    }
+
+    /**
+     * Receives messages from the dead-letter queue.
+     *
+     * @param connectionString the Service Bus connection string
+     * @param queueName        the queue name
+     * @param maxMessages      maximum number of messages to receive
+     * @return list of dead-lettered messages with resolved payloads
+     */
+    public List<ExtendedServiceBusMessage> receiveDeadLetterMessages(
+            String connectionString,
+            String queueName,
+            int maxMessages) {
+        try (ServiceBusReceiverClient dlqReceiverClient = new ServiceBusClientBuilder()
+                .connectionString(connectionString)
+                .receiver()
+                .queueName(queueName)
+                .subQueue(SubQueue.DEAD_LETTER_QUEUE)
+                .buildClient()) {
+
+            List<ExtendedServiceBusMessage> extendedMessages = new ArrayList<>();
+            
+            dlqReceiverClient.receiveMessages(maxMessages, Duration.ofSeconds(10))
+                    .forEach(message -> {
+                        ExtendedServiceBusMessage extendedMessage = processReceivedMessage(message);
+                        extendedMessages.add(extendedMessage);
+                    });
+
+            logger.debug("Received {} messages from dead-letter queue", extendedMessages.size());
+            return extendedMessages;
+        } catch (Exception e) {
+            logger.error("Failed to receive dead-letter messages", e);
+            throw new RuntimeException("Failed to receive dead-letter messages", e);
+        }
+    }
+
+    /**
+     * Processes messages from the dead-letter queue using a processor.
+     * Note: The returned processor is started but the caller is responsible for
+     * stopping it when done by calling close() on the returned client.
+     *
+     * @param connectionString the Service Bus connection string
+     * @param queueName        the queue name
+     * @param messageHandler   consumer to handle received dead-letter messages
+     * @param errorHandler     consumer to handle errors
+     * @return the started processor client that must be closed by the caller
+     */
+    public ServiceBusProcessorClient processDeadLetterMessages(
+            String connectionString,
+            String queueName,
+            Consumer<ExtendedServiceBusMessage> messageHandler,
+            Consumer<ServiceBusErrorContext> errorHandler) {
+        
+        ServiceBusProcessorClient dlqProcessorClient = new ServiceBusClientBuilder()
+                .connectionString(connectionString)
+                .processor()
+                .queueName(queueName)
+                .subQueue(SubQueue.DEAD_LETTER_QUEUE)
+                .processMessage(context -> {
+                    ServiceBusReceivedMessage message = context.getMessage();
+                    try {
+                        ExtendedServiceBusMessage extendedMessage = processReceivedMessage(message);
+                        messageHandler.accept(extendedMessage);
+                        context.complete();
+                    } catch (Exception e) {
+                        logger.error("Error processing dead-letter message: {}", message.getMessageId(), e);
+                        throw e;
+                    }
+                })
+                .processError(errorHandler)
+                .buildProcessorClient();
+
+        dlqProcessorClient.start();
+        logger.info("Dead-letter message processor started for queue: {}", queueName);
+        return dlqProcessorClient;
     }
 
     /**

@@ -6,7 +6,19 @@ azure:
     connection-string: ${AZURE_STORAGE_CONNECTION_STRING}
     container-name: ${AZURE_STORAGE_CONTAINER_NAME:large-messages}
   extended-client:
-    message-size-threshold: 262144
+    # Message size and blob settings
+    message-size-threshold: 262144    # 256 KB
     always-through-blob: false
     cleanup-blob-on-delete: true
     blob-key-prefix: ""
+    
+    # Retry configuration
+    retry-max-attempts: 3             # Maximum number of retry attempts
+    retry-backoff-millis: 1000        # Initial backoff delay in milliseconds
+    retry-backoff-multiplier: 2.0     # Backoff multiplier for exponential backoff
+    retry-max-backoff-millis: 30000   # Maximum backoff delay cap in milliseconds
+    
+    # Dead Letter Queue (DLQ) configuration
+    dead-letter-on-failure: true      # Whether to dead-letter messages on processing failure
+    dead-letter-reason: "ProcessingFailure"  # Default dead-letter reason
+    max-delivery-count: 10            # Informational only - actual enforcement is on Service Bus queue

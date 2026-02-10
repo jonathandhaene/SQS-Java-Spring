@@ -149,6 +149,155 @@ client.processMessages(
 );
 ```
 
+## Retry Logic
+
+The extended client automatically retries operations that fail due to transient errors. This helps handle temporary network issues, service throttling, and other recoverable failures.
+
+### How It Works
+
+- **Exponential Backoff**: Each retry waits longer than the previous one (e.g., 1s, 2s, 4s)
+- **Jitter**: Random variance (±25%) prevents thundering herd problems
+- **Configurable**: Control max attempts, initial delay, multiplier, and max delay
+
+### Operations with Retry
+
+All critical operations automatically use retry logic:
+
+1. **Message Sending** (`sendMessage()`)
+   - Retries Service Bus send operations
+   - Retries blob storage uploads for large messages
+
+2. **Blob Operations**
+   - Blob payload retrieval (`getPayload()`)
+   - Blob payload deletion (`deletePayload()`)
+
+3. **Configuration**
+
+```yaml
+azure:
+  extended-client:
+    retry-max-attempts: 3              # Total attempts (initial + retries)
+    retry-backoff-millis: 1000         # Initial backoff: 1 second
+    retry-backoff-multiplier: 2.0      # Each retry doubles the delay
+    retry-max-backoff-millis: 30000    # Cap delay at 30 seconds
+```
+
+### Example Retry Behavior
+
+With default configuration (3 attempts, 1s initial, 2x multiplier):
+
+```
+Attempt 1: Immediate
+Attempt 2: Wait ~1s (with jitter: 750ms-1250ms)
+Attempt 3: Wait ~2s (with jitter: 1500ms-2500ms)
+If all fail: throw exception
+```
+
+### Logging
+
+Retry attempts are logged automatically:
+```
+WARN  Operation failed on attempt 1/3. Retrying after 1000 ms. Error: Connection timeout
+WARN  Operation failed on attempt 2/3. Retrying after 2000 ms. Error: Connection timeout
+ERROR Operation failed after 3 attempts
+```
+
+## Dead Letter Queue (DLQ)
+
+The extended client supports Azure Service Bus Dead Letter Queues for handling messages that fail processing.
+
+### Automatic Dead-Lettering
+
+When `deadLetterOnFailure` is enabled (default), failed messages are automatically moved to the DLQ:
+
+```java
+client.processMessages(
+    connectionString,
+    queueName,
+    message -> {
+        // If this handler throws an exception, the message is dead-lettered
+        processBusinessLogic(message);
+    },
+    errorContext -> {
+        logger.error("Error: {}", errorContext.getException());
+    }
+);
+```
+
+### Configuration
+
+```yaml
+azure:
+  extended-client:
+    dead-letter-on-failure: true               # Enable automatic dead-lettering
+    dead-letter-reason: "ProcessingFailure"    # Default reason
+    max-delivery-count: 10                      # Informational only
+```
+
+> **Note**: The `max-delivery-count` property is informational. Actual enforcement must be configured on the Azure Service Bus queue itself.
+
+### Receiving from DLQ
+
+**Batch Receive:**
+```java
+List<ExtendedServiceBusMessage> dlqMessages = 
+    client.receiveDeadLetterMessages(connectionString, queueName, 10);
+
+for (ExtendedServiceBusMessage msg : dlqMessages) {
+    logger.info("Dead-letter reason: {}", msg.getDeadLetterReason());
+    logger.info("Dead-letter description: {}", msg.getDeadLetterDescription());
+    logger.info("Delivery count: {}", msg.getDeliveryCount());
+    
+    // Handle or reprocess the message
+    reprocessMessage(msg);
+}
+```
+
+**Continuous Processing:**
+```java
+ServiceBusProcessorClient dlqProcessor = client.processDeadLetterMessages(
+    connectionString,
+    queueName,
+    message -> {
+        // Process dead-lettered messages
+        logger.info("Reprocessing DLQ message: {}", message.getMessageId());
+        handleFailedMessage(message);
+    },
+    errorContext -> {
+        logger.error("DLQ processing error: {}", errorContext.getException());
+    }
+);
+
+// Important: Stop the processor when done
+// dlqProcessor.close();
+```
+
+### Dead-Letter Reasons
+
+Common dead-letter reasons:
+- `ProcessingFailure` - Handler threw an exception
+- `MaxDeliveryCountExceeded` - Message exceeded retry attempts (set on queue)
+- `MessageExpired` - Message TTL expired
+- Custom reasons can be set in application code
+
+### Message Metadata
+
+Dead-lettered messages include additional metadata:
+
+```java
+ExtendedServiceBusMessage message = ...;
+
+// Standard fields
+String body = message.getBody();
+String messageId = message.getMessageId();
+Map<String, Object> properties = message.getApplicationProperties();
+
+// DLQ-specific fields
+String reason = message.getDeadLetterReason();           // Why it was dead-lettered
+String description = message.getDeadLetterDescription(); // Additional details
+long deliveryCount = message.getDeliveryCount();         // Number of delivery attempts
+```
+
 ## Configuration Reference
 
 | Property | Default | Description |
@@ -161,6 +310,13 @@ client.processMessages(
 | `azure.extended-client.always-through-blob` | `false` | Force all messages through blob |
 | `azure.extended-client.cleanup-blob-on-delete` | `true` | Auto-delete blob on message delete |
 | `azure.extended-client.blob-key-prefix` | `""` | Prefix for blob names |
+| `azure.extended-client.retry-max-attempts` | `3` | Maximum number of retry attempts |
+| `azure.extended-client.retry-backoff-millis` | `1000` | Initial backoff delay in milliseconds |
+| `azure.extended-client.retry-backoff-multiplier` | `2.0` | Backoff multiplier for exponential backoff |
+| `azure.extended-client.retry-max-backoff-millis` | `30000` | Maximum backoff delay cap in milliseconds |
+| `azure.extended-client.dead-letter-on-failure` | `true` | Whether to dead-letter messages on processing failure |
+| `azure.extended-client.dead-letter-reason` | `"ProcessingFailure"` | Default dead-letter reason |
+| `azure.extended-client.max-delivery-count` | `10` | Informational only - actual enforcement is on Service Bus queue |
 
 ## Key Features
 
@@ -178,6 +334,20 @@ client.processMessages(
 - Optional blob deletion when messages are consumed
 - Graceful handling of already-deleted blobs
 - Configurable cleanup behavior
+
+### ✅ Retry Logic
+- Automatic retry with exponential backoff for transient failures
+- Configurable retry attempts, backoff delays, and multipliers
+- Retries applied to: message sends, blob uploads/downloads, blob deletions
+- Jitter added to prevent thundering herd problem
+- Detailed logging of retry attempts
+
+### ✅ Dead Letter Queue (DLQ) Support
+- Automatic dead-lettering of failed messages when processing
+- Configurable dead-letter reason and description
+- Methods to receive and process messages from DLQ
+- Delivery count tracking on messages
+- Graceful failure handling with context preservation
 
 ### ✅ Spring Boot Integration
 - Auto-configuration with `@EnableAutoConfiguration`
@@ -226,6 +396,8 @@ See [`ExampleApplication.java`](src/main/java/com/azure/servicebus/extended/exam
 - Receiving and processing messages
 - Cleaning up blob payloads
 - Using application properties
+- Automatic retry behavior on send/receive operations
+- Dead Letter Queue (DLQ) support and demonstrations
 
 ## Architecture Components
 
@@ -237,6 +409,7 @@ See [`ExampleApplication.java`](src/main/java/com/azure/servicebus/extended/exam
 - **`ExtendedServiceBusMessage`**: Wrapper for received messages with resolved payloads
 - **`ExtendedClientConfiguration`**: Configuration properties
 - **`AzureExtendedClientAutoConfiguration`**: Spring Boot auto-configuration
+- **`RetryHandler`**: Utility for retry logic with exponential backoff
 
 ## Thread Safety
 
@@ -249,12 +422,28 @@ The library is designed to be thread-safe:
 
 ## Error Handling
 
-> ⚠️ Note: Error handling in this project is minimal and for demonstration only. Production use would require comprehensive error handling, retry logic, circuit breakers, and proper monitoring.
+> ⚠️ Note: This project now includes retry logic and DLQ support for better error handling, but it's still for demonstration purposes. Production use would require comprehensive monitoring, alerting, and operational procedures.
 
-- Storage failures throw `RuntimeException` with detailed error messages
-- Blob cleanup failures are logged but don't fail message processing
-- 404 errors on blob deletion are handled gracefully
-- All errors are logged with SLF4J
+### Built-in Error Handling
+
+- **Retry Logic**: Transient failures automatically retry with exponential backoff
+  - Configurable attempts, delays, and backoff multipliers
+  - Applies to message sends, blob operations, and more
+  - Detailed logging of retry attempts
+
+- **Dead Letter Queue**: Failed messages moved to DLQ for later analysis
+  - Automatic dead-lettering on processing failures
+  - Configurable dead-letter reasons
+  - Methods to receive and reprocess DLQ messages
+
+- **Blob Cleanup**: Blob deletion failures are logged but don't fail message processing
+  - Graceful handling of already-deleted blobs (404 errors)
+  - Retry logic applied to deletion attempts
+
+- **Logging**: All operations and errors logged with SLF4J
+  - Retry attempts logged at WARN level
+  - Final failures logged at ERROR level
+  - Success operations logged at DEBUG level
 
 ## License & Disclaimer
 

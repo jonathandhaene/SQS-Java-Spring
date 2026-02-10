@@ -260,4 +260,141 @@ class AzureServiceBusExtendedClientTest {
         }
         return sb.toString();
     }
+
+    // ========== Retry Logic Tests ==========
+
+    @Test
+    void testSendMessage_retriesOnFailure() {
+        // Arrange
+        String message = "Test message";
+        
+        // Mock sender to fail twice, then succeed
+        doThrow(new RuntimeException("Transient failure 1"))
+            .doThrow(new RuntimeException("Transient failure 2"))
+            .doNothing()
+            .when(mockSenderClient).sendMessage(any(ServiceBusMessage.class));
+
+        // Act
+        client.sendMessage(message);
+
+        // Assert
+        verify(mockSenderClient, times(3)).sendMessage(any(ServiceBusMessage.class));
+    }
+
+    @Test
+    void testSendMessage_failsAfterMaxRetries() {
+        // Arrange
+        String message = "Test message";
+        
+        // Mock sender to always fail
+        doThrow(new RuntimeException("Persistent failure"))
+            .when(mockSenderClient).sendMessage(any(ServiceBusMessage.class));
+
+        // Act & Assert
+        assertThrows(RuntimeException.class, () -> client.sendMessage(message));
+        
+        // Should attempt 3 times (initial + 2 retries) based on default config
+        verify(mockSenderClient, times(3)).sendMessage(any(ServiceBusMessage.class));
+    }
+
+    @Test
+    void testLargeMessage_retriesBlobUpload() {
+        // Arrange
+        String largeMessage = generateMessage(2048); // Exceeds threshold
+        BlobPointer expectedPointer = new BlobPointer("test-container", "test-blob");
+        
+        // Mock blob store to fail twice, then succeed
+        when(mockPayloadStore.storePayload(anyString(), eq(largeMessage)))
+            .thenThrow(new RuntimeException("Transient blob failure 1"))
+            .thenThrow(new RuntimeException("Transient blob failure 2"))
+            .thenReturn(expectedPointer);
+
+        // Act
+        client.sendMessage(largeMessage);
+
+        // Assert
+        verify(mockPayloadStore, times(3)).storePayload(anyString(), eq(largeMessage));
+        verify(mockSenderClient, times(1)).sendMessage(any(ServiceBusMessage.class));
+    }
+
+    @Test
+    void testDeletePayload_retriesOnTransientFailure() {
+        // Arrange
+        BlobPointer pointer = new BlobPointer("test-container", "test-blob");
+        ExtendedServiceBusMessage message = new ExtendedServiceBusMessage(
+                "msg-id",
+                "body",
+                new HashMap<>(),
+                true,
+                pointer
+        );
+        
+        // Mock delete to fail twice, then succeed
+        doThrow(new RuntimeException("Transient delete failure 1"))
+            .doThrow(new RuntimeException("Transient delete failure 2"))
+            .doNothing()
+            .when(mockPayloadStore).deletePayload(pointer);
+
+        // Act
+        client.deletePayload(message);
+
+        // Assert
+        verify(mockPayloadStore, times(3)).deletePayload(pointer);
+    }
+
+    // ========== Dead Letter Queue Tests ==========
+
+    @Test
+    void testConfiguration_dlqDefaults() {
+        // Verify DLQ configuration has expected defaults
+        assertTrue(config.isDeadLetterOnFailure());
+        assertEquals("ProcessingFailure", config.getDeadLetterReason());
+        assertEquals(10, config.getMaxDeliveryCount());
+    }
+
+    @Test
+    void testExtendedServiceBusMessage_includesDLQFields() {
+        // Arrange & Act
+        ExtendedServiceBusMessage message = new ExtendedServiceBusMessage(
+                "msg-id",
+                "body",
+                new HashMap<>(),
+                false,
+                null,
+                "MaxDeliveryCountExceeded",
+                "Message exceeded max delivery attempts",
+                5
+        );
+
+        // Assert
+        assertEquals("MaxDeliveryCountExceeded", message.getDeadLetterReason());
+        assertEquals("Message exceeded max delivery attempts", message.getDeadLetterDescription());
+        assertEquals(5, message.getDeliveryCount());
+    }
+
+    @Test
+    void testExtendedServiceBusMessage_backwardCompatibleConstructor() {
+        // Arrange & Act
+        ExtendedServiceBusMessage message = new ExtendedServiceBusMessage(
+                "msg-id",
+                "body",
+                new HashMap<>(),
+                false,
+                null
+        );
+
+        // Assert - should have null DLQ fields and 0 delivery count
+        assertNull(message.getDeadLetterReason());
+        assertNull(message.getDeadLetterDescription());
+        assertEquals(0, message.getDeliveryCount());
+    }
+
+    @Test
+    void testConfiguration_retryDefaults() {
+        // Assert retry configuration defaults
+        assertEquals(3, config.getRetryMaxAttempts());
+        assertEquals(1000L, config.getRetryBackoffMillis());
+        assertEquals(2.0, config.getRetryBackoffMultiplier());
+        assertEquals(30000L, config.getRetryMaxBackoffMillis());
+    }
 }

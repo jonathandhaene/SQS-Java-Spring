@@ -25,6 +25,8 @@ import java.util.Map;
  * - Send small messages (sent directly)
  * - Receive and process messages
  * - Clean up blob payloads
+ * - Retry logic (automatic on send/receive operations)
+ * - Dead Letter Queue (DLQ) support
  */
 @SpringBootApplication(scanBasePackages = "com.azure.servicebus.extended")
 public class ExampleApplication {
@@ -49,6 +51,9 @@ public class ExampleApplication {
                 customProperties.put("messageType", "large");
                 customProperties.put("timestamp", System.currentTimeMillis());
                 
+                // Note: Retry logic is automatically applied on send operations
+                // If sending fails, it will retry up to retryMaxAttempts times
+                // with exponential backoff configured in application.yml
                 client.sendMessage(largeMessage, customProperties);
                 logger.info("Large message sent successfully (should be in blob storage)");
 
@@ -71,16 +76,31 @@ public class ExampleApplication {
                     logger.info("Processing message: {}", message.getMessageId());
                     logger.info("  - Body length: {} bytes", message.getBody().length());
                     logger.info("  - From blob: {}", message.isPayloadFromBlob());
+                    logger.info("  - Delivery count: {}", message.getDeliveryCount());
                     logger.info("  - Application properties: {}", message.getApplicationProperties());
 
                     // Example 4: Clean up blob payload (if enabled in config)
                     if (message.isPayloadFromBlob()) {
                         logger.info("  - Cleaning up blob payload: {}", message.getBlobPointer());
+                        // Note: Delete operations also use retry logic automatically
                         client.deletePayload(message);
                     }
                 }
 
                 logger.info("\n=== Example completed successfully ===");
+                
+                // Note: The following examples demonstrate DLQ functionality
+                // In a real scenario, you would use these methods when you have messages
+                // that have been dead-lettered due to processing failures
+                
+                logger.info("\n--- DLQ Example: Receiving from Dead Letter Queue ---");
+                logger.info("Note: This is a demonstration. In production, use this when messages fail processing.");
+                logger.info("Dead-lettered messages can be received using:");
+                logger.info("  client.receiveDeadLetterMessages(connectionString, queueName, maxMessages)");
+                logger.info("Or processed continuously using:");
+                logger.info("  client.processDeadLetterMessages(connectionString, queueName, handler, errorHandler)");
+                logger.info("When processing messages with processMessages(), failed messages are automatically");
+                logger.info("  dead-lettered if deadLetterOnFailure is enabled in configuration.");
                 
             } catch (Exception e) {
                 logger.error("Error in example application", e);

@@ -30,6 +30,17 @@ public class ExtendedClientConfiguration {
     private boolean alwaysThroughBlob = false;
     private boolean cleanupBlobOnDelete = true;
     private String blobKeyPrefix = "";
+    
+    // Retry configuration
+    private int retryMaxAttempts = 3;
+    private long retryBackoffMillis = 1000L;
+    private double retryBackoffMultiplier = 2.0;
+    private long retryMaxBackoffMillis = 30000L;
+    
+    // Dead Letter Queue configuration
+    private boolean deadLetterOnFailure = true;
+    private String deadLetterReason = "ProcessingFailure";
+    private int maxDeliveryCount = 10;
 
     /**
      * Gets the message size threshold in bytes.
@@ -84,5 +95,97 @@ public class ExtendedClientConfiguration {
 
     public void setBlobKeyPrefix(String blobKeyPrefix) {
         this.blobKeyPrefix = blobKeyPrefix;
+    }
+
+    /**
+     * Gets the maximum number of retry attempts for operations.
+     *
+     * @return the maximum retry attempts
+     */
+    public int getRetryMaxAttempts() {
+        return retryMaxAttempts;
+    }
+
+    public void setRetryMaxAttempts(int retryMaxAttempts) {
+        this.retryMaxAttempts = retryMaxAttempts;
+    }
+
+    /**
+     * Gets the initial backoff delay in milliseconds for retries.
+     *
+     * @return the initial backoff delay
+     */
+    public long getRetryBackoffMillis() {
+        return retryBackoffMillis;
+    }
+
+    public void setRetryBackoffMillis(long retryBackoffMillis) {
+        this.retryBackoffMillis = retryBackoffMillis;
+    }
+
+    /**
+     * Gets the backoff multiplier for exponential backoff.
+     *
+     * @return the backoff multiplier
+     */
+    public double getRetryBackoffMultiplier() {
+        return retryBackoffMultiplier;
+    }
+
+    public void setRetryBackoffMultiplier(double retryBackoffMultiplier) {
+        this.retryBackoffMultiplier = retryBackoffMultiplier;
+    }
+
+    /**
+     * Gets the maximum backoff delay in milliseconds.
+     *
+     * @return the maximum backoff delay
+     */
+    public long getRetryMaxBackoffMillis() {
+        return retryMaxBackoffMillis;
+    }
+
+    public void setRetryMaxBackoffMillis(long retryMaxBackoffMillis) {
+        this.retryMaxBackoffMillis = retryMaxBackoffMillis;
+    }
+
+    /**
+     * Indicates whether messages should be dead-lettered on processing failure.
+     *
+     * @return true if dead-lettering is enabled, false otherwise
+     */
+    public boolean isDeadLetterOnFailure() {
+        return deadLetterOnFailure;
+    }
+
+    public void setDeadLetterOnFailure(boolean deadLetterOnFailure) {
+        this.deadLetterOnFailure = deadLetterOnFailure;
+    }
+
+    /**
+     * Gets the default dead-letter reason.
+     *
+     * @return the dead-letter reason
+     */
+    public String getDeadLetterReason() {
+        return deadLetterReason;
+    }
+
+    public void setDeadLetterReason(String deadLetterReason) {
+        this.deadLetterReason = deadLetterReason;
+    }
+
+    /**
+     * Gets the maximum delivery count for informational purposes.
+     * Actual enforcement is on the Service Bus queue configuration.
+     *
+     * @return the max delivery count
+     */
+    public int getMaxDeliveryCount() {
+        return maxDeliveryCount;
+    }
+
+    public void setMaxDeliveryCount(int maxDeliveryCount) {
+        this.maxDeliveryCount = maxDeliveryCount;
     }
 }
