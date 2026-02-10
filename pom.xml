@@ -6,12 +6,12 @@
     <modelVersion>4.0.0</modelVersion>
 
     <groupId>com.azure.servicebus.extended</groupId>
-    <artifactId>azure-servicebus-extended-client-lib</artifactId>
+    <artifactId>azure-servicebus-large-message-client</artifactId>
     <version>1.0.0-SNAPSHOT</version>
     <packaging>jar</packaging>
 
-    <name>Azure Service Bus Extended Client Library</name>
-    <description>Azure Service Bus Extended Client Library for Java Spring Boot - transparently offloads large message payloads to Azure Blob Storage</description>
+    <name>Azure Service Bus Large Message Client</name>
+    <description>Azure Service Bus Large Message Client for Java Spring Boot - transparently offloads large message payloads to Azure Blob Storage</description>
 
     <properties>
         <java.version>17</java.version>

@@ -1,7 +1,7 @@
-# Azure Service Bus Extended Client Guide
+# Azure Service Bus Large Message Client Guide
 
 ## Introduction
-This guide provides instructions and examples for using the Azure Service Bus Extended Client Library. It covers configuration, payload offloading to Azure Blob Storage, retries, error handling, and common usage patterns.
+This guide provides instructions and examples for using the Azure Service Bus Large Message Client. It covers configuration, payload offloading to Azure Blob Storage, retries, error handling, and common usage patterns.
 
 ## Configuration
 
@@ -252,4 +252,4 @@ client.processMessages(
 | `azure.extended-client.max-delivery-count` | `10` | Informational only |
 
 ## Conclusion
-This guide covers the key features and usage patterns of the Azure Service Bus Extended Client Library. For more details, refer to the [README](README.md) and the example application in the repository.
+This guide covers the key features and usage patterns of the Azure Service Bus Large Message Client. For more details, refer to the [README](README.md) and the example application in the repository.

@@ -19,8 +19,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Handles storage and retrieval of message payloads in Azure Blob Storage.
- * This is the Azure equivalent of AWS S3BackedPayloadStore.
+ * Handles storage and retrieval of large message payloads in Azure Blob Storage.
  */
 public class BlobPayloadStore {
     private static final Logger logger = LoggerFactory.getLogger(BlobPayloadStore.class);

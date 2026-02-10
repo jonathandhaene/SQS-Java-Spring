@@ -23,7 +23,7 @@ import java.util.stream.Collectors;
 
 /**
  * Azure Service Bus Extended Client - the core client that implements the extended client pattern.
- * This is the Azure equivalent of Amazon SQS Extended Client.
+ * Core client for handling large messages with Azure Service Bus.
  * 
  * Automatically offloads large message payloads to Azure Blob Storage when they exceed
  * the configured threshold, and transparently resolves blob-stored payloads when receiving messages.

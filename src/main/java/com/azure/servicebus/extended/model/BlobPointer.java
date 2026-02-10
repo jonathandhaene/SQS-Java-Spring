@@ -9,7 +9,6 @@ import java.util.Objects;
 
 /**
  * Represents a pointer to a message payload stored in Azure Blob Storage.
- * This is the Azure equivalent of AWS PayloadS3Pointer.
  */
 public class BlobPointer {
     private static final ObjectMapper objectMapper = new ObjectMapper();
