@@ -1,123 +1,255 @@
-# Guide: Transitioning from AWS SQS Extended Client to Azure Service Bus Extended Client
+# Azure Service Bus Extended Client Guide
 
 ## Introduction
-This migration guide provides specific instructions and examples for transitioning from the AWS SQS Extended Client to the Azure Service Bus Extended Client. It addresses API compatibility checks, configuration changes, and key architectural differences such as payload offloading, retries, and error handling.
+This guide provides instructions and examples for using the Azure Service Bus Extended Client Library. It covers configuration, payload offloading to Azure Blob Storage, retries, error handling, and common usage patterns.
 
-## API Compatibility Checks
-Before you start the migration, it's important to ensure that the APIs you are using are compatible:
-1. **Message Structure**: Validate that the message structure used in AWS SQS can be mapped to Azure Service Bus messages.
-2. **Message Attributes**: Review the attributes supported by both services and update your code to handle any differences.
+## Configuration
 
-## Configuration Changes
-Update your configuration settings based on the following:
-1. **Connection Strings**: Change the connection string format to match Azure Service Bus's requirements.
-   
-   - **AWS SQS Connection Example**:
-     ```java
-     String awsSqsUrl = "https://sqs.us-east-1.amazonaws.com/123456789012/MyQueue";
-     ```
-   - **Azure Service Bus Connection Example**:
-     ```java
-     String azureServiceBusConnectionString = "Endpoint=sb://<your_namespace>.servicebus.windows.net/;SharedAccessKeyName=<key_name>;SharedAccessKey=<key>";
-     ```
+### Connection Settings
 
-2. **Queue Names**: Update the naming conventions if necessary, as Azure Service Bus may have different naming restrictions.
-
-## Key Architectural Differences
-### 1. Payload Offloading
-- **AWS SQS** allows offloading large payloads using Amazon S3. 
-- **Azure Service Bus** supports similar features using Azure Blob Storage, which can be implemented with the following code:
-  ```java
-  BlobClient blobClient = new BlobClientBuilder() 
-      .connectionString(azureBlobConnectionString) 
-      .containerName("yourContainer") 
-      .blobName("yourBlobName") 
-      .buildClient();
-  blobClient.upload(new ByteArrayInputStream(messageBytes), messageBytes.length);
-  ```
-
-### 2. Retries
-- AWS SQS has built-in retry policies with configurable visibility timeouts.
-- Azure Service Bus retries can be configured programmatically or via the SDK options:
-  ```java
-  ServiceBusClientBuilder clientBuilder = new ServiceBusClientBuilder()
-      .connectionString(azureServiceBusConnectionString)
-      .retryOptions(new AmqpRetryOptions()
-          .setMaxRetries(3)
-          .setMode(AmqpRetryMode.EXPONENTIAL)
-          .setMaxDelay(Duration.ofSeconds(30))
-      );
-  ``` 
-
-### 3. Error Handling
-- Handling errors in **AWS SQS** involves interacting with Dead Letter Queues (DLQs).
-- In **Azure Service Bus**, DLQs are built-in and can be used seamlessly. Example:
-  ```java
-  ServiceBusProcessorClient processor = new ServiceBusClientBuilder()
-      .processor()
-      .connectionString(azureServiceBusConnectionString)
-      .queueName("my-queue")
-      .processMessage(context -> {
-          System.out.println("Processing message: " + context.getMessage().getBody().toString());
-      })
-      .processError(context -> {
-          System.err.println("Error occurred: " + context.getException());
-      })
-      .buildProcessorClient();
-  processor.start();
-  ```
-
-## Java Code Examples
-### Example of Sending a Message
-**AWS SQS**:
-```java
-SendMessageRequest sendMsgRequest = SendMessageRequest.builder()
-    .queueUrl(queueUrl)
-    .messageBody("Sample message")
-    .build();
-SendMessageResponse response = sqsClient.sendMessage(sendMsgRequest);
-System.out.println("Message ID: " + response.messageId());
+**application.yml:**
+```yaml
+azure:
+  servicebus:
+    connection-string: ${AZURE_SERVICEBUS_CONNECTION_STRING}
+    queue-name: ${AZURE_SERVICEBUS_QUEUE_NAME:my-queue}
+  storage:
+    connection-string: ${AZURE_STORAGE_CONNECTION_STRING}
+    container-name: ${AZURE_STORAGE_CONTAINER_NAME:large-messages}
+  extended-client:
+    message-size-threshold: 262144    # 256 KB
+    always-through-blob: false
+    cleanup-blob-on-delete: true
+    blob-key-prefix: ""
 ```
 
-**Azure Service Bus**:
-```java
-ServiceBusSenderClient senderClient = new ServiceBusClientBuilder()
-    .connectionString(azureServiceBusConnectionString)
-    .sender()
-    .queueName("queue-name")
-    .buildClient();
+### Environment Variables
 
-senderClient.sendMessage(new ServiceBusMessage("Sample message"));
-System.out.println("Message sent successfully.");
+```bash
+e...","AZURE_STORAGE_QUEUE_NAME":"my-queue"}
+
+## Key Features
+
+### 1. Payload Offloading to Azure Blob Storage
+
+Messages exceeding the configured size threshold (default 256 KB) are automatically offloaded to Azure Blob Storage. A pointer is sent via Service Bus instead of the full payload.
+
+```java
+@Autowired
+private AzureServiceBusExtendedClient client;
+
+// Small message — sent directly via Service Bus
+client.sendMessage("Small message");
+
+// Large message — automatically offloaded to Blob Storage
+String largeMessage = generateLargePayload(); // > 256 KB
+client.sendMessage(largeMessage);
+
+// With custom application properties
+Map<String, Object> properties = new HashMap<>();
+properties.put("priority", "high");
+client.sendMessage(largeMessage, properties);
 ```
 
-### Example of Receiving Messages
-**AWS SQS**:
+### 2. Receiving Messages
+
+Payloads stored in Blob Storage are transparently resolved back to the original message body on receive.
+
 ```java
-ReceiveMessageRequest receiveRequest = ReceiveMessageRequest.builder()
-    .queueUrl(queueUrl)
-    .maxNumberOfMessages(10)
-    .build();
-List<Message> messages = sqsClient.receiveMessage(receiveRequest).messages();
-for (Message message : messages) {
-    System.out.println("Message: " + message.body());
+List<ExtendedServiceBusMessage> messages = client.receiveMessages(10);
+
+for (ExtendedServiceBusMessage message : messages) {
+    // Body is automatically resolved from blob if needed
+    String body = message.getBody();
+
+    if (message.isPayloadFromBlob()) {
+        System.out.println("Payload was stored in blob: " + message.getBlobPointer());
+
+        // Clean up blob payload after processing
+        client.deletePayload(message);
+    }
 }
 ```
 
-**Azure Service Bus**:
-```java
-ServiceBusReceiverClient receiverClient = new ServiceBusClientBuilder()
-    .connectionString(azureServiceBusConnectionString)
-    .receiver()
-    .queueName("queue-name")
-    .buildClient();
+### 3. Batch Operations
 
-IterableStream<ServiceBusReceivedMessage> messages = receiverClient.receiveMessages(10);
-for (ServiceBusReceivedMessage message : messages) {
-    System.out.println("Message: " + message.getBody().toString());
-    receiverClient.complete(message);
+Send multiple messages efficiently using `ServiceBusMessageBatch` with automatic splitting when the batch is full.
+
+```java
+// Batch send
+List<String> messageBodies = List.of("message1", "message2", "message3");
+client.sendMessageBatch(messageBodies);
+
+// Batch send with custom properties
+Map<String, Object> properties = Map.of("source", "batch-job");
+client.sendMessageBatch(messageBodies, properties);
+
+// Batch delete blob payloads
+List<ExtendedServiceBusMessage> processedMessages = ...;
+client.deletePayloadBatch(processedMessages);
+```
+
+### 4. Retry Logic
+
+Transient failures are automatically retried with exponential backoff and jitter.
+
+**Configuration:**
+```yaml
+azure:
+  extended-client:
+    retry-max-attempts: 3
+    retry-backoff-millis: 1000
+    retry-backoff-multiplier: 2.0
+    retry-max-backoff-millis: 30000
+```
+
+**Programmatic retry options:**
+```java
+ServiceBusClientBuilder clientBuilder = new ServiceBusClientBuilder()
+    .connectionString(connectionString)
+    .retryOptions(new AmqpRetryOptions()
+        .setMaxRetries(3)
+        .setMode(AmqpRetryMode.EXPONENTIAL)
+        .setMaxDelay(Duration.ofSeconds(30))
+    );
+```
+
+### 5. Dead Letter Queue (DLQ) Support
+
+Failed messages are automatically moved to the Dead Letter Queue when `deadLetterOnFailure` is enabled.
+
+**Configuration:**
+```yaml
+azure:
+  extended-client:
+    dead-letter-on-failure: true
+    dead-letter-reason: "ProcessingFailure"
+    max-delivery-count: 10
+```
+
+**Processing with automatic dead-lettering:**
+```java
+client.processMessages(
+    connectionString,
+    queueName,
+    message -> {
+        // If this handler throws an exception, the message is dead-lettered
+        processBusinessLogic(message);
+    },
+    errorContext -> {
+        System.err.println("Error: " + errorContext.getException());
+    }
+);
+```
+
+**Receiving from the DLQ:**
+```java
+List<ExtendedServiceBusMessage> dlqMessages =
+    client.receiveDeadLetterMessages(connectionString, queueName, 10);
+
+for (ExtendedServiceBusMessage msg : dlqMessages) {
+    System.out.println("Dead-letter reason: " + msg.getDeadLetterReason());
+    System.out.println("Description: " + msg.getDeadLetterDescription());
+    System.out.println("Delivery count: " + msg.getDeliveryCount());
 }
 ```
+
+### 6. Scheduled Messages
+
+Schedule messages for future delivery using Azure Service Bus's scheduled enqueue feature.
+
+```java
+OffsetDateTime scheduledTime = OffsetDateTime.now().plusMinutes(30);
+
+// Schedule a message
+client.sendScheduledMessage("Delayed message body", scheduledTime);
+
+// Schedule with custom properties
+Map<String, Object> properties = Map.of("type", "reminder");
+client.sendScheduledMessage("Delayed message body", scheduledTime, properties);
+```
+
+### 7. Message Deferral
+
+Defer a message for later retrieval by sequence number.
+
+```java
+// Defer a message
+client.deferMessage(receivedMessage);
+
+// Retrieve a deferred message by sequence number
+ExtendedServiceBusMessage deferred = client.receiveDeferredMessage(sequenceNumber);
+
+// Retrieve multiple deferred messages
+List<ExtendedServiceBusMessage> deferredBatch =
+    client.receiveDeferredMessages(List.of(seq1, seq2, seq3));
+```
+
+### 8. Session Support
+
+Send messages with session IDs for ordered, grouped processing.
+
+```java
+// Send a message with a session ID
+client.sendMessage("Order update", "session-order-123");
+
+// Send with session ID and custom properties
+Map<String, Object> properties = Map.of("orderType", "express");
+client.sendMessage("Order update", "session-order-123", properties);
+```
+
+### 9. Message Lock Renewal
+
+Renew message locks to extend processing time for long-running operations.
+
+```java
+// Renew lock on a single message
+client.renewMessageLock(receivedMessage);
+
+// Renew locks on a batch of messages
+client.renewMessageLockBatch(List.of(msg1, msg2, msg3));
+```
+
+### 10. Event-Driven Message Processing
+
+Use the built-in processor for continuous, event-driven message consumption.
+
+```java
+client.processMessages(
+    connectionString,
+    queueName,
+    message -> {
+        System.out.println("Received: " + message.getBody());
+
+        if (message.isPayloadFromBlob()) {
+            client.deletePayload(message);
+        }
+    },
+    errorContext -> {
+        System.err.println("Error: " + errorContext.getException());
+    }
+);
+```
+
+## Configuration Reference
+
+| Property | Default | Description |
+|----------|---------|-------------|
+| `azure.servicebus.connection-string` | *required* | Service Bus connection string |
+| `azure.servicebus.queue-name` | `my-queue` | Queue name |
+| `azure.storage.connection-string` | *required* | Blob Storage connection string |
+| `azure.storage.container-name` | `large-messages` | Container for large payloads |
+| `azure.extended-client.message-size-threshold` | `262144` (256 KB) | Size threshold for offloading |
+| `azure.extended-client.always-through-blob` | `false` | Force all messages through blob |
+| `azure.extended-client.cleanup-blob-on-delete` | `true` | Auto-delete blob on message delete |
+| `azure.extended-client.blob-key-prefix` | `""` | Prefix for blob names |
+| `azure.extended-client.retry-max-attempts` | `3` | Maximum retry attempts |
+| `azure.extended-client.retry-backoff-millis` | `1000` | Initial backoff delay (ms) |
+| `azure.extended-client.retry-backoff-multiplier` | `2.0` | Backoff multiplier |
+| `azure.extended-client.retry-max-backoff-millis` | `30000` | Maximum backoff delay cap (ms) |
+| `azure.extended-client.dead-letter-on-failure` | `true` | Dead-letter messages on failure |
+| `azure.extended-client.dead-letter-reason` | `"ProcessingFailure"` | Default dead-letter reason |
+| `azure.extended-client.max-delivery-count` | `10` | Informational only |
 
 ## Conclusion
-Migrating from AWS SQS to Azure Service Bus requires careful consideration of the differences in APIs, configurations, and architectural approaches. By following this guide and utilizing the provided examples, you can make the transition as smooth as possible.
+This guide covers the key features and usage patterns of the Azure Service Bus Extended Client Library. For more details, refer to the [README](README.md) and the example application in the repository.
