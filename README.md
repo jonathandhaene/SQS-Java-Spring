@@ -45,13 +45,13 @@ azure:
   servicebus:
     connection-string: ${AZURE_SERVICEBUS_CONNECTION_STRING}
     queue-name: ${AZURE_SERVICEBUS_QUEUE_NAME:my-queue}
+    large-message-client:
+      message-size-threshold: 262144    # 256 KB
+      always-through-blob: false
+      cleanup-blob-on-delete: true
   storage:
     connection-string: ${AZURE_STORAGE_CONNECTION_STRING}
     container-name: ${AZURE_STORAGE_CONTAINER_NAME:large-messages}
-  large-message-client:
-    message-size-threshold: 262144    # 256 KB
-    always-through-blob: false
-    cleanup-blob-on-delete: true
 ```
 
 ### Basic Usage

@@ -13,14 +13,14 @@ azure:
   servicebus:
     connection-string: ${AZURE_SERVICEBUS_CONNECTION_STRING}
     queue-name: ${AZURE_SERVICEBUS_QUEUE_NAME:my-queue}
+    large-message-client:
+      message-size-threshold: 262144    # 256 KB
+      always-through-blob: false
+      cleanup-blob-on-delete: true
+      blob-key-prefix: ""
   storage:
     connection-string: ${AZURE_STORAGE_CONNECTION_STRING}
     container-name: ${AZURE_STORAGE_CONTAINER_NAME:large-messages}
-  large-message-client:
-    message-size-threshold: 262144    # 256 KB
-    always-through-blob: false
-    cleanup-blob-on-delete: true
-    blob-key-prefix: ""
 ```
 
 ### Environment Variables
@@ -96,11 +96,12 @@ Transient failures are automatically retried with exponential backoff and jitter
 **Configuration:**
 ```yaml
 azure:
-  large-message-client:
-    retry-max-attempts: 3
-    retry-backoff-millis: 1000
-    retry-backoff-multiplier: 2.0
-    retry-max-backoff-millis: 30000
+  servicebus:
+    large-message-client:
+      retry-max-attempts: 3
+      retry-backoff-millis: 1000
+      retry-backoff-multiplier: 2.0
+      retry-max-backoff-millis: 30000
 ```
 
 **Programmatic retry options:**
@@ -121,10 +122,11 @@ Failed messages are automatically moved to the Dead Letter Queue when `deadLette
 **Configuration:**
 ```yaml
 azure:
-  large-message-client:
-    dead-letter-on-failure: true
-    dead-letter-reason: "ProcessingFailure"
-    max-delivery-count: 10
+  servicebus:
+    large-message-client:
+      dead-letter-on-failure: true
+      dead-letter-reason: "ProcessingFailure"
+      max-delivery-count: 10
 ```
 
 **Processing with automatic dead-lettering:**
@@ -239,17 +241,17 @@ client.processMessages(
 | `azure.servicebus.queue-name` | `my-queue` | Queue name |
 | `azure.storage.connection-string` | *required* | Blob Storage connection string |
 | `azure.storage.container-name` | `large-messages` | Container for large payloads |
-| `azure.large-message-client.message-size-threshold` | `262144` (256 KB) | Size threshold for offloading |
-| `azure.large-message-client.always-through-blob` | `false` | Force all messages through blob |
-| `azure.large-message-client.cleanup-blob-on-delete` | `true` | Auto-delete blob on message delete |
-| `azure.large-message-client.blob-key-prefix` | `""` | Prefix for blob names |
-| `azure.large-message-client.retry-max-attempts` | `3` | Maximum retry attempts |
-| `azure.large-message-client.retry-backoff-millis` | `1000` | Initial backoff delay (ms) |
-| `azure.large-message-client.retry-backoff-multiplier` | `2.0` | Backoff multiplier |
-| `azure.large-message-client.retry-max-backoff-millis` | `30000` | Maximum backoff delay cap (ms) |
-| `azure.large-message-client.dead-letter-on-failure` | `true` | Dead-letter messages on failure |
-| `azure.large-message-client.dead-letter-reason` | `"ProcessingFailure"` | Default dead-letter reason |
-| `azure.large-message-client.max-delivery-count` | `10` | Informational only |
+| `azure.servicebus.large-message-client.message-size-threshold` | `262144` (256 KB) | Size threshold for offloading |
+| `azure.servicebus.large-message-client.always-through-blob` | `false` | Force all messages through blob |
+| `azure.servicebus.large-message-client.cleanup-blob-on-delete` | `true` | Auto-delete blob on message delete |
+| `azure.servicebus.large-message-client.blob-key-prefix` | `""` | Prefix for blob names |
+| `azure.servicebus.large-message-client.retry-max-attempts` | `3` | Maximum retry attempts |
+| `azure.servicebus.large-message-client.retry-backoff-millis` | `1000` | Initial backoff delay (ms) |
+| `azure.servicebus.large-message-client.retry-backoff-multiplier` | `2.0` | Backoff multiplier |
+| `azure.servicebus.large-message-client.retry-max-backoff-millis` | `30000` | Maximum backoff delay cap (ms) |
+| `azure.servicebus.large-message-client.dead-letter-on-failure` | `true` | Dead-letter messages on failure |
+| `azure.servicebus.large-message-client.dead-letter-reason` | `"ProcessingFailure"` | Default dead-letter reason |
+| `azure.servicebus.large-message-client.max-delivery-count` | `10` | Informational only |
 
 ## Conclusion
 This guide covers the key features and usage patterns of the Azure Service Bus Large Message Client. For more details, refer to the [README](README.md) and the example application in the repository.

@@ -8,7 +8,7 @@ import org.springframework.stereotype.Component;
  * Configuration properties for the Azure Service Bus Large Message Client.
  */
 @Component
-@ConfigurationProperties(prefix = "azure.large-message-client")
+@ConfigurationProperties(prefix = "azure.servicebus.large-message-client")
 public class LargeMessageClientConfiguration {
     
     /**
