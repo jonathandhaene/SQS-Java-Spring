@@ -26,6 +26,8 @@
         <slf4j.version>2.0.9</slf4j.version>
         <junit.version>5.10.0</junit.version>
         <mockito.version>5.7.0</mockito.version>
+        <reactor.version>3.6.0</reactor.version>
+        <opentelemetry.version>1.31.0</opentelemetry.version>
     </properties>
 
     <dependencyManagement>
@@ -80,6 +82,27 @@
             <artifactId>slf4j-api</artifactId>
         </dependency>
 
+        <!-- Reactor Core for Async Client -->
+        <dependency>
+            <groupId>io.projectreactor</groupId>
+            <artifactId>reactor-core</artifactId>
+        </dependency>
+
+        <!-- OpenTelemetry (Optional - for tracing support) -->
+        <dependency>
+            <groupId>io.opentelemetry</groupId>
+            <artifactId>opentelemetry-api</artifactId>
+            <version>${opentelemetry.version}</version>
+            <optional>true</optional>
+        </dependency>
+
+        <dependency>
+            <groupId>com.azure</groupId>
+            <artifactId>azure-core-tracing-opentelemetry</artifactId>
+            <version>1.0.0-beta.45</version>
+            <optional>true</optional>
+        </dependency>
+
         <!-- Test Dependencies -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
@@ -90,6 +113,12 @@
         <dependency>
             <groupId>org.mockito</groupId>
             <artifactId>mockito-core</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>io.projectreactor</groupId>
+            <artifactId>reactor-test</artifactId>
             <scope>test</scope>
         </dependency>
     </dependencies>

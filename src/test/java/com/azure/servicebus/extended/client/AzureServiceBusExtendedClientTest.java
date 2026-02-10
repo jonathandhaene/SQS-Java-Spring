@@ -42,6 +42,7 @@ class AzureServiceBusExtendedClientTest {
         config.setAlwaysThroughBlob(false);
         config.setCleanupBlobOnDelete(true);
         config.setBlobKeyPrefix("");
+        config.setUseLegacyReservedAttributeName(false); // Use modern name for tests
 
         client = new AzureServiceBusExtendedClient(
                 mockSenderClient,

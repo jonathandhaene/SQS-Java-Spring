@@ -1,5 +1,6 @@
 package com.azure.servicebus.extended.config;
 
+import com.azure.servicebus.extended.util.BlobKeyPrefixValidator;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
 
@@ -17,14 +18,34 @@ public class ExtendedClientConfiguration {
     public static final int DEFAULT_MESSAGE_SIZE_THRESHOLD = 262144;
 
     /**
-     * Reserved application property name for storing the original payload size.
+     * Reserved application property name for storing the original payload size (modern).
      */
     public static final String RESERVED_ATTRIBUTE_NAME = "ExtendedPayloadSize";
+
+    /**
+     * Legacy reserved attribute name for backward compatibility.
+     */
+    public static final String LEGACY_RESERVED_ATTRIBUTE_NAME = "ServiceBusLargePayloadSize";
 
     /**
      * Application property marker indicating the message body contains a blob pointer.
      */
     public static final String BLOB_POINTER_MARKER = "com.azure.servicebus.extended.BlobPointer";
+
+    /**
+     * Extended client user agent identifier.
+     */
+    public static final String EXTENDED_CLIENT_USER_AGENT = "ExtendedClientUserAgent";
+
+    /**
+     * User agent value.
+     */
+    public static final String USER_AGENT_VALUE = "AzureServiceBusExtendedClient/1.0.0-SNAPSHOT";
+
+    /**
+     * Maximum allowed application properties (excluding reserved ones).
+     */
+    public static final int MAX_ALLOWED_PROPERTIES = 9;
 
     private int messageSizeThreshold = DEFAULT_MESSAGE_SIZE_THRESHOLD;
     private boolean alwaysThroughBlob = false;
@@ -41,6 +62,27 @@ public class ExtendedClientConfiguration {
     private boolean deadLetterOnFailure = true;
     private String deadLetterReason = "ProcessingFailure";
     private int maxDeliveryCount = 10;
+    
+    // Feature toggles
+    private boolean payloadSupportEnabled = true;
+    private boolean useLegacyReservedAttributeName = true;
+    private boolean ignorePayloadNotFound = false;
+    
+    // Validation
+    private int maxAllowedProperties = MAX_ALLOWED_PROPERTIES;
+    
+    // Blob configuration
+    private String blobAccessTier = null; // Hot, Cool, Archive
+    private int blobTtlDays = 0; // 0 = disabled
+    
+    // Duplicate detection
+    private boolean enableDuplicateDetectionId = false;
+    
+    // Tracing
+    private boolean tracingEnabled = true;
+    
+    // Encryption (nested configuration)
+    private EncryptionConfiguration encryption = new EncryptionConfiguration();
 
     /**
      * Gets the message size threshold in bytes.
@@ -94,6 +136,7 @@ public class ExtendedClientConfiguration {
     }
 
     public void setBlobKeyPrefix(String blobKeyPrefix) {
+        BlobKeyPrefixValidator.validate(blobKeyPrefix);
         this.blobKeyPrefix = blobKeyPrefix;
     }
 
@@ -187,5 +230,131 @@ public class ExtendedClientConfiguration {
 
     public void setMaxDeliveryCount(int maxDeliveryCount) {
         this.maxDeliveryCount = maxDeliveryCount;
+    }
+
+    /**
+     * Indicates whether payload support is enabled.
+     *
+     * @return true if payload support is enabled, false otherwise
+     */
+    public boolean isPayloadSupportEnabled() {
+        return payloadSupportEnabled;
+    }
+
+    public void setPayloadSupportEnabled(boolean payloadSupportEnabled) {
+        this.payloadSupportEnabled = payloadSupportEnabled;
+    }
+
+    /**
+     * Indicates whether to use legacy reserved attribute name for backward compatibility.
+     *
+     * @return true to use legacy name, false for modern name
+     */
+    public boolean isUseLegacyReservedAttributeName() {
+        return useLegacyReservedAttributeName;
+    }
+
+    public void setUseLegacyReservedAttributeName(boolean useLegacyReservedAttributeName) {
+        this.useLegacyReservedAttributeName = useLegacyReservedAttributeName;
+    }
+
+    /**
+     * Gets the reserved attribute name based on configuration.
+     *
+     * @return the legacy or modern reserved attribute name
+     */
+    public String getReservedAttributeName() {
+        return useLegacyReservedAttributeName ? LEGACY_RESERVED_ATTRIBUTE_NAME : RESERVED_ATTRIBUTE_NAME;
+    }
+
+    /**
+     * Indicates whether to ignore missing blob payloads.
+     *
+     * @return true to ignore missing payloads, false to throw exception
+     */
+    public boolean isIgnorePayloadNotFound() {
+        return ignorePayloadNotFound;
+    }
+
+    public void setIgnorePayloadNotFound(boolean ignorePayloadNotFound) {
+        this.ignorePayloadNotFound = ignorePayloadNotFound;
+    }
+
+    /**
+     * Gets the maximum allowed application properties count.
+     *
+     * @return the maximum allowed properties
+     */
+    public int getMaxAllowedProperties() {
+        return maxAllowedProperties;
+    }
+
+    public void setMaxAllowedProperties(int maxAllowedProperties) {
+        this.maxAllowedProperties = maxAllowedProperties;
+    }
+
+    /**
+     * Gets the blob access tier (Hot/Cool/Archive).
+     *
+     * @return the blob access tier, or null if not set
+     */
+    public String getBlobAccessTier() {
+        return blobAccessTier;
+    }
+
+    public void setBlobAccessTier(String blobAccessTier) {
+        this.blobAccessTier = blobAccessTier;
+    }
+
+    /**
+     * Gets the blob TTL in days.
+     *
+     * @return the blob TTL in days, or 0 if disabled
+     */
+    public int getBlobTtlDays() {
+        return blobTtlDays;
+    }
+
+    public void setBlobTtlDays(int blobTtlDays) {
+        this.blobTtlDays = blobTtlDays;
+    }
+
+    /**
+     * Indicates whether duplicate detection ID generation is enabled.
+     *
+     * @return true if enabled, false otherwise
+     */
+    public boolean isEnableDuplicateDetectionId() {
+        return enableDuplicateDetectionId;
+    }
+
+    public void setEnableDuplicateDetectionId(boolean enableDuplicateDetectionId) {
+        this.enableDuplicateDetectionId = enableDuplicateDetectionId;
+    }
+
+    /**
+     * Indicates whether tracing is enabled.
+     *
+     * @return true if tracing is enabled, false otherwise
+     */
+    public boolean isTracingEnabled() {
+        return tracingEnabled;
+    }
+
+    public void setTracingEnabled(boolean tracingEnabled) {
+        this.tracingEnabled = tracingEnabled;
+    }
+
+    /**
+     * Gets the encryption configuration.
+     *
+     * @return the encryption configuration
+     */
+    public EncryptionConfiguration getEncryption() {
+        return encryption;
+    }
+
+    public void setEncryption(EncryptionConfiguration encryption) {
+        this.encryption = encryption;
     }
 }

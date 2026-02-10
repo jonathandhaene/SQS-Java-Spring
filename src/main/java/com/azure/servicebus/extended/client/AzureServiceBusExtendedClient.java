@@ -7,14 +7,19 @@ import com.azure.servicebus.extended.config.ExtendedClientConfiguration;
 import com.azure.servicebus.extended.model.BlobPointer;
 import com.azure.servicebus.extended.model.ExtendedServiceBusMessage;
 import com.azure.servicebus.extended.store.BlobPayloadStore;
+import com.azure.servicebus.extended.util.ApplicationPropertyValidator;
+import com.azure.servicebus.extended.util.DuplicateDetectionHelper;
 import com.azure.servicebus.extended.util.RetryHandler;
+import com.azure.servicebus.extended.util.TracingHelper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.time.OffsetDateTime;
 import java.util.*;
 import java.util.function.Consumer;
+import java.util.stream.Collectors;
 
 /**
  * Azure Service Bus Extended Client - the core client that implements the extended client pattern.
@@ -111,46 +116,111 @@ public class AzureServiceBusExtendedClient implements AutoCloseable {
      * @param applicationProperties custom application properties
      */
     public void sendMessage(String messageBody, Map<String, Object> applicationProperties) {
-        retryHandler.executeWithRetry(() -> {
-            int payloadSize = messageBody.getBytes(StandardCharsets.UTF_8).length;
-            boolean shouldOffload = config.isAlwaysThroughBlob() || 
-                                   payloadSize > config.getMessageSizeThreshold();
+        sendMessage(messageBody, null, applicationProperties);
+    }
 
-            ServiceBusMessage message;
-            Map<String, Object> properties = new HashMap<>(applicationProperties);
+    /**
+     * Sends a message with session ID.
+     *
+     * @param messageBody the message body to send
+     * @param sessionId   the session ID
+     */
+    public void sendMessage(String messageBody, String sessionId) {
+        sendMessage(messageBody, sessionId, new HashMap<>());
+    }
 
-            if (shouldOffload) {
-                logger.debug("Message size {} exceeds threshold or alwaysThroughBlob=true. Offloading to blob storage.", payloadSize);
-                
-                // Generate unique blob name
-                String blobName = config.getBlobKeyPrefix() + UUID.randomUUID().toString();
-                
-                // Store payload in blob with retry
-                BlobPointer pointer = retryHandler.executeWithRetry(() -> 
-                    payloadStore.storePayload(blobName, messageBody)
-                );
-                
-                // Create message with blob pointer as body
-                message = new ServiceBusMessage(pointer.toJson());
-                
-                // Add metadata properties
-                properties.put(ExtendedClientConfiguration.RESERVED_ATTRIBUTE_NAME, payloadSize);
-                properties.put(ExtendedClientConfiguration.BLOB_POINTER_MARKER, "true");
-                
-                logger.debug("Payload offloaded to blob: {}", pointer);
-            } else {
-                logger.debug("Message size {} is within threshold. Sending directly.", payloadSize);
-                message = new ServiceBusMessage(messageBody);
+    /**
+     * Sends a message with session ID and application properties.
+     *
+     * @param messageBody           the message body to send
+     * @param sessionId            the session ID (null for non-session messages)
+     * @param applicationProperties custom application properties
+     */
+    public void sendMessage(String messageBody, String sessionId, Map<String, Object> applicationProperties) {
+        Object span = null;
+        try {
+            // Start tracing span if enabled
+            if (config.isTracingEnabled() && TracingHelper.isAvailable()) {
+                span = TracingHelper.startSendSpan("ServiceBus.send");
+                TracingHelper.addAttribute(span, "messaging.system", "servicebus");
             }
 
-            // Set application properties
-            for (Map.Entry<String, Object> entry : properties.entrySet()) {
-                message.getApplicationProperties().put(entry.getKey(), entry.getValue());
-            }
+            retryHandler.executeWithRetry(() -> {
+                // Validate application properties
+                ApplicationPropertyValidator.validate(applicationProperties, config.getMaxAllowedProperties());
 
-            senderClient.sendMessage(message);
-            logger.debug("Message sent successfully");
-        });
+                int payloadSize = messageBody.getBytes(StandardCharsets.UTF_8).length;
+                boolean shouldOffload = config.isPayloadSupportEnabled() && 
+                                       (config.isAlwaysThroughBlob() || payloadSize > config.getMessageSizeThreshold());
+
+                ServiceBusMessage message;
+                Map<String, Object> properties = new HashMap<>(applicationProperties);
+
+                if (shouldOffload) {
+                    logger.debug("Message size {} exceeds threshold or alwaysThroughBlob=true. Offloading to blob storage.", payloadSize);
+                    
+                    // Generate unique blob name
+                    String blobName = config.getBlobKeyPrefix() + UUID.randomUUID().toString();
+                    
+                    // Store payload in blob with retry
+                    BlobPointer pointer = retryHandler.executeWithRetry(() -> 
+                        payloadStore.storePayload(blobName, messageBody)
+                    );
+                    
+                    // Create message with blob pointer as body
+                    message = new ServiceBusMessage(pointer.toJson());
+                    
+                    // Add metadata properties using configured attribute name
+                    properties.put(config.getReservedAttributeName(), payloadSize);
+                    properties.put(ExtendedClientConfiguration.BLOB_POINTER_MARKER, "true");
+                    
+                    logger.debug("Payload offloaded to blob: {}", pointer);
+                } else {
+                    logger.debug("Message size {} is within threshold. Sending directly.", payloadSize);
+                    message = new ServiceBusMessage(messageBody);
+                }
+
+                // Set session ID if provided
+                if (sessionId != null && !sessionId.isEmpty()) {
+                    message.setSessionId(sessionId);
+                    logger.debug("Message session ID set to: {}", sessionId);
+                }
+
+                // Compute duplicate detection ID if enabled
+                if (config.isEnableDuplicateDetectionId()) {
+                    String messageId = DuplicateDetectionHelper.computeContentHash(messageBody);
+                    message.setMessageId(messageId);
+                    logger.debug("Duplicate detection enabled. Message ID set to content hash: {}", messageId);
+                }
+
+                // Add user-agent header
+                properties.put(ExtendedClientConfiguration.EXTENDED_CLIENT_USER_AGENT, 
+                              ExtendedClientConfiguration.USER_AGENT_VALUE);
+
+                // Inject trace context if tracing is enabled
+                if (config.isTracingEnabled()) {
+                    TracingHelper.injectTraceContext(properties);
+                }
+
+                // Set application properties
+                for (Map.Entry<String, Object> entry : properties.entrySet()) {
+                    message.getApplicationProperties().put(entry.getKey(), entry.getValue());
+                }
+
+                senderClient.sendMessage(message);
+                logger.debug("Message sent successfully");
+            });
+
+            if (span != null) {
+                TracingHelper.endSpan(span);
+            }
+        } catch (Exception e) {
+            if (span != null) {
+                TracingHelper.recordException(span, e);
+                TracingHelper.endSpan(span);
+            }
+            throw e;
+        }
     }
 
     /**
@@ -161,6 +231,244 @@ public class AzureServiceBusExtendedClient implements AutoCloseable {
     public void sendMessages(List<String> messageBodies) {
         for (String body : messageBodies) {
             sendMessage(body);
+        }
+    }
+
+    /**
+     * Sends multiple messages using true batch send with ServiceBusMessageBatch.
+     * Automatically splits into multiple batches when needed and evaluates each message
+     * individually for blob offloading.
+     *
+     * @param messageBodies list of message bodies to send
+     */
+    public void sendMessageBatch(List<String> messageBodies) {
+        sendMessageBatch(messageBodies, new HashMap<>());
+    }
+
+    /**
+     * Sends multiple messages using true batch send with ServiceBusMessageBatch.
+     * Automatically splits into multiple batches when needed and evaluates each message
+     * individually for blob offloading.
+     *
+     * @param messageBodies         list of message bodies to send
+     * @param applicationProperties application properties to apply to all messages
+     */
+    public void sendMessageBatch(List<String> messageBodies, Map<String, Object> applicationProperties) {
+        if (messageBodies == null || messageBodies.isEmpty()) {
+            logger.debug("No messages to send in batch");
+            return;
+        }
+
+        Object span = null;
+        try {
+            // Start tracing span if enabled
+            if (config.isTracingEnabled() && TracingHelper.isAvailable()) {
+                span = TracingHelper.startSendSpan("ServiceBus.sendBatch");
+                TracingHelper.addAttribute(span, "messaging.system", "servicebus");
+                TracingHelper.addAttribute(span, "message.count", String.valueOf(messageBodies.size()));
+            }
+
+            // Validate application properties
+            ApplicationPropertyValidator.validate(applicationProperties, config.getMaxAllowedProperties());
+
+            retryHandler.executeWithRetry(() -> {
+                List<ServiceBusMessage> messagesToSend = new ArrayList<>();
+
+                // Process each message individually for blob offloading
+                for (String messageBody : messageBodies) {
+                    int payloadSize = messageBody.getBytes(StandardCharsets.UTF_8).length;
+                    boolean shouldOffload = config.isPayloadSupportEnabled() &&
+                                           (config.isAlwaysThroughBlob() || payloadSize > config.getMessageSizeThreshold());
+
+                    ServiceBusMessage message;
+                    Map<String, Object> properties = new HashMap<>(applicationProperties);
+
+                    if (shouldOffload) {
+                        logger.debug("Batch message size {} exceeds threshold. Offloading to blob storage.", payloadSize);
+                        
+                        // Generate unique blob name
+                        String blobName = config.getBlobKeyPrefix() + UUID.randomUUID().toString();
+                        
+                        // Store payload in blob with retry
+                        BlobPointer pointer = retryHandler.executeWithRetry(() -> 
+                            payloadStore.storePayload(blobName, messageBody)
+                        );
+                        
+                        // Create message with blob pointer as body
+                        message = new ServiceBusMessage(pointer.toJson());
+                        
+                        // Add metadata properties
+                        properties.put(config.getReservedAttributeName(), payloadSize);
+                        properties.put(ExtendedClientConfiguration.BLOB_POINTER_MARKER, "true");
+                    } else {
+                        message = new ServiceBusMessage(messageBody);
+                    }
+
+                    // Compute duplicate detection ID if enabled
+                    if (config.isEnableDuplicateDetectionId()) {
+                        String messageId = DuplicateDetectionHelper.computeContentHash(messageBody);
+                        message.setMessageId(messageId);
+                    }
+
+                    // Add user-agent header
+                    properties.put(ExtendedClientConfiguration.EXTENDED_CLIENT_USER_AGENT, 
+                                  ExtendedClientConfiguration.USER_AGENT_VALUE);
+
+                    // Inject trace context if tracing is enabled
+                    if (config.isTracingEnabled()) {
+                        TracingHelper.injectTraceContext(properties);
+                    }
+
+                    // Set application properties
+                    for (Map.Entry<String, Object> entry : properties.entrySet()) {
+                        message.getApplicationProperties().put(entry.getKey(), entry.getValue());
+                    }
+
+                    messagesToSend.add(message);
+                }
+
+                // Send messages using ServiceBusMessageBatch with auto-split
+                int messageIndex = 0;
+                int totalMessages = messagesToSend.size();
+                int batchCount = 0;
+
+                while (messageIndex < totalMessages) {
+                    ServiceBusMessageBatch currentBatch = senderClient.createMessageBatch();
+                    int messagesInCurrentBatch = 0;
+
+                    while (messageIndex < totalMessages) {
+                        ServiceBusMessage message = messagesToSend.get(messageIndex);
+                        
+                        if (currentBatch.tryAddMessage(message)) {
+                            messageIndex++;
+                            messagesInCurrentBatch++;
+                        } else {
+                            // Current batch is full, break to send it
+                            if (messagesInCurrentBatch == 0) {
+                                // Single message doesn't fit in batch, send it individually
+                                logger.warn("Message at index {} too large for batch, sending individually", messageIndex);
+                                senderClient.sendMessage(message);
+                                messageIndex++;
+                            }
+                            break;
+                        }
+                    }
+
+                    if (messagesInCurrentBatch > 0) {
+                        senderClient.sendMessages(currentBatch);
+                        batchCount++;
+                        logger.debug("Sent batch {} with {} messages", batchCount, messagesInCurrentBatch);
+                    }
+                }
+
+                logger.debug("Successfully sent {} messages in {} batch(es)", totalMessages, batchCount);
+            });
+
+            if (span != null) {
+                TracingHelper.endSpan(span);
+            }
+        } catch (Exception e) {
+            if (span != null) {
+                TracingHelper.recordException(span, e);
+                TracingHelper.endSpan(span);
+            }
+            throw e;
+        }
+    }
+
+    /**
+     * Schedules a message to be enqueued at a specific time.
+     *
+     * @param messageBody   the message body to send
+     * @param scheduledTime the time to enqueue the message
+     * @return the sequence number of the scheduled message
+     */
+    public Long sendScheduledMessage(String messageBody, OffsetDateTime scheduledTime) {
+        return sendScheduledMessage(messageBody, scheduledTime, new HashMap<>());
+    }
+
+    /**
+     * Schedules a message with application properties to be enqueued at a specific time.
+     *
+     * @param messageBody           the message body to send
+     * @param scheduledTime         the time to enqueue the message
+     * @param applicationProperties custom application properties
+     * @return the sequence number of the scheduled message
+     */
+    public Long sendScheduledMessage(String messageBody, OffsetDateTime scheduledTime, 
+                                     Map<String, Object> applicationProperties) {
+        Object span = null;
+        try {
+            // Start tracing span if enabled
+            if (config.isTracingEnabled() && TracingHelper.isAvailable()) {
+                span = TracingHelper.startSendSpan("ServiceBus.scheduleMessage");
+                TracingHelper.addAttribute(span, "messaging.system", "servicebus");
+                TracingHelper.addAttribute(span, "scheduled.time", scheduledTime.toString());
+            }
+
+            Long sequenceNumber = retryHandler.executeWithRetry(() -> {
+                // Validate application properties
+                ApplicationPropertyValidator.validate(applicationProperties, config.getMaxAllowedProperties());
+
+                int payloadSize = messageBody.getBytes(StandardCharsets.UTF_8).length;
+                boolean shouldOffload = config.isPayloadSupportEnabled() &&
+                                       (config.isAlwaysThroughBlob() || payloadSize > config.getMessageSizeThreshold());
+
+                ServiceBusMessage message;
+                Map<String, Object> properties = new HashMap<>(applicationProperties);
+
+                if (shouldOffload) {
+                    logger.debug("Scheduled message size {} exceeds threshold. Offloading to blob storage.", payloadSize);
+                    
+                    String blobName = config.getBlobKeyPrefix() + UUID.randomUUID().toString();
+                    BlobPointer pointer = retryHandler.executeWithRetry(() -> 
+                        payloadStore.storePayload(blobName, messageBody)
+                    );
+                    
+                    message = new ServiceBusMessage(pointer.toJson());
+                    properties.put(config.getReservedAttributeName(), payloadSize);
+                    properties.put(ExtendedClientConfiguration.BLOB_POINTER_MARKER, "true");
+                } else {
+                    message = new ServiceBusMessage(messageBody);
+                }
+
+                // Compute duplicate detection ID if enabled
+                if (config.isEnableDuplicateDetectionId()) {
+                    String messageId = DuplicateDetectionHelper.computeContentHash(messageBody);
+                    message.setMessageId(messageId);
+                }
+
+                // Add user-agent header
+                properties.put(ExtendedClientConfiguration.EXTENDED_CLIENT_USER_AGENT, 
+                              ExtendedClientConfiguration.USER_AGENT_VALUE);
+
+                // Inject trace context if tracing is enabled
+                if (config.isTracingEnabled()) {
+                    TracingHelper.injectTraceContext(properties);
+                }
+
+                // Set application properties
+                for (Map.Entry<String, Object> entry : properties.entrySet()) {
+                    message.getApplicationProperties().put(entry.getKey(), entry.getValue());
+                }
+
+                // Schedule the message
+                Long seqNum = senderClient.scheduleMessage(message, scheduledTime);
+                logger.debug("Scheduled message for {} with sequence number: {}", scheduledTime, seqNum);
+                return seqNum;
+            });
+
+            if (span != null) {
+                TracingHelper.endSpan(span);
+            }
+
+            return sequenceNumber;
+        } catch (Exception e) {
+            if (span != null) {
+                TracingHelper.recordException(span, e);
+                TracingHelper.endSpan(span);
+            }
+            throw e;
         }
     }
 
@@ -268,39 +576,79 @@ public class AzureServiceBusExtendedClient implements AutoCloseable {
      * @return an ExtendedServiceBusMessage with resolved payload
      */
     private ExtendedServiceBusMessage processReceivedMessage(ServiceBusReceivedMessage message) {
-        Map<String, Object> appProperties = new HashMap<>(message.getApplicationProperties());
-        boolean isFromBlob = "true".equals(String.valueOf(appProperties.get(ExtendedClientConfiguration.BLOB_POINTER_MARKER)));
-        
-        String body = message.getBody().toString();
-        BlobPointer blobPointer = null;
+        Object span = null;
+        try {
+            // Start tracing span if enabled
+            if (config.isTracingEnabled() && TracingHelper.isAvailable()) {
+                span = TracingHelper.startSendSpan("ServiceBus.receive");
+                TracingHelper.addAttribute(span, "messaging.system", "servicebus");
+                TracingHelper.addAttribute(span, "message.id", message.getMessageId());
+            }
 
-        if (isFromBlob) {
-            logger.debug("Message contains blob pointer. Resolving payload...");
-            blobPointer = BlobPointer.fromJson(body);
+            Map<String, Object> appProperties = new HashMap<>(message.getApplicationProperties());
             
-            // Use retry for blob retrieval
-            String blobPointerJson = body;
-            body = retryHandler.executeWithRetry(() -> 
-                payloadStore.getPayload(BlobPointer.fromJson(blobPointerJson))
+            // Extract trace context if tracing is enabled
+            if (config.isTracingEnabled()) {
+                TracingHelper.extractTraceContext(appProperties);
+            }
+            
+            boolean isFromBlob = "true".equals(String.valueOf(appProperties.get(ExtendedClientConfiguration.BLOB_POINTER_MARKER)));
+            
+            String body = message.getBody().toString();
+            BlobPointer blobPointer = null;
+
+            if (isFromBlob && config.isPayloadSupportEnabled()) {
+                logger.debug("Message contains blob pointer. Resolving payload...");
+                blobPointer = BlobPointer.fromJson(body);
+                
+                // Use retry for blob retrieval
+                String blobPointerJson = body;
+                body = retryHandler.executeWithRetry(() -> 
+                    payloadStore.getPayload(BlobPointer.fromJson(blobPointerJson))
+                );
+                
+                // Handle null payload (ignorePayloadNotFound enabled)
+                if (body == null) {
+                    logger.warn("Blob payload not found for message {}. Setting body to empty string.", message.getMessageId());
+                    body = "";
+                }
+                
+                // Remove internal marker properties
+                appProperties.remove(ExtendedClientConfiguration.BLOB_POINTER_MARKER);
+                
+                // Remove both legacy and modern reserved attribute names
+                appProperties.remove(ExtendedClientConfiguration.RESERVED_ATTRIBUTE_NAME);
+                appProperties.remove(ExtendedClientConfiguration.LEGACY_RESERVED_ATTRIBUTE_NAME);
+                
+                logger.debug("Payload resolved from blob: {}", blobPointer);
+            }
+            
+            // Strip user-agent header
+            appProperties.remove(ExtendedClientConfiguration.EXTENDED_CLIENT_USER_AGENT);
+
+            ExtendedServiceBusMessage extendedMessage = new ExtendedServiceBusMessage(
+                    message.getMessageId(),
+                    body,
+                    appProperties,
+                    isFromBlob,
+                    blobPointer,
+                    message.getDeadLetterReason(),
+                    message.getDeadLetterErrorDescription(),
+                    message.getDeliveryCount()
             );
-            
-            // Remove internal marker properties
-            appProperties.remove(ExtendedClientConfiguration.BLOB_POINTER_MARKER);
-            appProperties.remove(ExtendedClientConfiguration.RESERVED_ATTRIBUTE_NAME);
-            
-            logger.debug("Payload resolved from blob: {}", blobPointer);
-        }
 
-        return new ExtendedServiceBusMessage(
-                message.getMessageId(),
-                body,
-                appProperties,
-                isFromBlob,
-                blobPointer,
-                message.getDeadLetterReason(),
-                message.getDeadLetterErrorDescription(),
-                message.getDeliveryCount()
-        );
+            if (span != null) {
+                TracingHelper.endSpan(span);
+            }
+
+            return extendedMessage;
+        } catch (Exception e) {
+            if (span != null) {
+                TracingHelper.recordException(span, e);
+                TracingHelper.endSpan(span);
+            }
+            throw e;
+        }
     }
 
     /**
@@ -311,6 +659,11 @@ public class AzureServiceBusExtendedClient implements AutoCloseable {
     public void deletePayload(ExtendedServiceBusMessage message) {
         if (!config.isCleanupBlobOnDelete()) {
             logger.debug("Blob cleanup is disabled. Skipping deletion.");
+            return;
+        }
+
+        if (!config.isPayloadSupportEnabled()) {
+            logger.debug("Payload support is disabled. Skipping deletion.");
             return;
         }
 
@@ -332,6 +685,184 @@ public class AzureServiceBusExtendedClient implements AutoCloseable {
             logger.debug("Blob payload deleted successfully");
         } catch (Exception e) {
             logger.error("Failed to delete blob payload after retries", e);
+        }
+    }
+
+    /**
+     * Deletes blob payloads for multiple messages in batch with per-message error handling.
+     *
+     * @param messages list of extended Service Bus messages
+     * @return count of successfully deleted blobs
+     */
+    public int deletePayloadBatch(List<ExtendedServiceBusMessage> messages) {
+        if (messages == null || messages.isEmpty()) {
+            logger.debug("No messages provided for batch deletion");
+            return 0;
+        }
+
+        if (!config.isCleanupBlobOnDelete()) {
+            logger.debug("Blob cleanup is disabled. Skipping batch deletion.");
+            return 0;
+        }
+
+        if (!config.isPayloadSupportEnabled()) {
+            logger.debug("Payload support is disabled. Skipping batch deletion.");
+            return 0;
+        }
+
+        int successCount = 0;
+        int failureCount = 0;
+
+        for (ExtendedServiceBusMessage message : messages) {
+            try {
+                if (message.isPayloadFromBlob() && message.getBlobPointer() != null) {
+                    retryHandler.executeWithRetry(() -> {
+                        payloadStore.deletePayload(message.getBlobPointer());
+                    });
+                    successCount++;
+                    logger.debug("Deleted blob payload for message: {}", message.getMessageId());
+                }
+            } catch (Exception e) {
+                failureCount++;
+                logger.error("Failed to delete blob payload for message {}: {}", 
+                           message.getMessageId(), e.getMessage());
+            }
+        }
+
+        logger.info("Batch delete completed: {} successful, {} failed", successCount, failureCount);
+        return successCount;
+    }
+
+    /**
+     * Renews the lock on a received message.
+     *
+     * @param message the received message to renew lock for
+     * @return the new lock expiration time
+     */
+    public OffsetDateTime renewMessageLock(ServiceBusReceivedMessage message) {
+        try {
+            logger.debug("Renewing message lock for message: {}", message.getMessageId());
+            OffsetDateTime newLockExpirationTime = receiverClient.renewMessageLock(message);
+            logger.debug("Message lock renewed. New expiration: {}", newLockExpirationTime);
+            return newLockExpirationTime;
+        } catch (Exception e) {
+            logger.error("Failed to renew message lock for message: {}", message.getMessageId(), e);
+            throw new RuntimeException("Failed to renew message lock", e);
+        }
+    }
+
+    /**
+     * Renews the lock on multiple received messages in batch.
+     *
+     * @param messages list of received messages to renew locks for
+     * @return map of message ID to new lock expiration time
+     */
+    public Map<String, OffsetDateTime> renewMessageLockBatch(List<ServiceBusReceivedMessage> messages) {
+        if (messages == null || messages.isEmpty()) {
+            logger.debug("No messages provided for batch lock renewal");
+            return new HashMap<>();
+        }
+
+        Map<String, OffsetDateTime> results = new HashMap<>();
+        int successCount = 0;
+        int failureCount = 0;
+
+        for (ServiceBusReceivedMessage message : messages) {
+            try {
+                OffsetDateTime newLockExpiration = receiverClient.renewMessageLock(message);
+                results.put(message.getMessageId(), newLockExpiration);
+                successCount++;
+                logger.debug("Lock renewed for message: {} (expires: {})", 
+                           message.getMessageId(), newLockExpiration);
+            } catch (Exception e) {
+                failureCount++;
+                logger.error("Failed to renew lock for message {}: {}", 
+                           message.getMessageId(), e.getMessage());
+            }
+        }
+
+        logger.info("Batch lock renewal completed: {} successful, {} failed", successCount, failureCount);
+        return results;
+    }
+
+    /**
+     * Defers a message for later processing.
+     *
+     * @param message the message to defer
+     */
+    public void deferMessage(ServiceBusReceivedMessage message) {
+        try {
+            logger.debug("Deferring message: {}", message.getMessageId());
+            receiverClient.defer(message);
+            logger.debug("Message deferred successfully. Sequence number: {}", message.getSequenceNumber());
+        } catch (Exception e) {
+            logger.error("Failed to defer message: {}", message.getMessageId(), e);
+            throw new RuntimeException("Failed to defer message", e);
+        }
+    }
+
+    /**
+     * Receives a deferred message by sequence number.
+     *
+     * @param sequenceNumber the sequence number of the deferred message
+     * @return the extended Service Bus message with resolved payload
+     */
+    public ExtendedServiceBusMessage receiveDeferredMessage(long sequenceNumber) {
+        try {
+            logger.debug("Receiving deferred message with sequence number: {}", sequenceNumber);
+            ServiceBusReceivedMessage message = receiverClient.receiveDeferredMessage(sequenceNumber);
+            
+            if (message == null) {
+                logger.warn("No deferred message found with sequence number: {}", sequenceNumber);
+                return null;
+            }
+            
+            ExtendedServiceBusMessage extendedMessage = processReceivedMessage(message);
+            logger.debug("Deferred message received and processed");
+            return extendedMessage;
+        } catch (Exception e) {
+            logger.error("Failed to receive deferred message with sequence number: {}", sequenceNumber, e);
+            throw new RuntimeException("Failed to receive deferred message", e);
+        }
+    }
+
+    /**
+     * Receives multiple deferred messages by sequence numbers.
+     *
+     * @param sequenceNumbers list of sequence numbers of deferred messages
+     * @return list of extended Service Bus messages with resolved payloads
+     */
+    public List<ExtendedServiceBusMessage> receiveDeferredMessages(List<Long> sequenceNumbers) {
+        if (sequenceNumbers == null || sequenceNumbers.isEmpty()) {
+            logger.debug("No sequence numbers provided for deferred message retrieval");
+            return new ArrayList<>();
+        }
+
+        try {
+            logger.debug("Receiving {} deferred messages", sequenceNumbers.size());
+            
+            List<ExtendedServiceBusMessage> extendedMessages = new ArrayList<>();
+            
+            for (Long sequenceNumber : sequenceNumbers) {
+                try {
+                    ServiceBusReceivedMessage message = receiverClient.receiveDeferredMessage(sequenceNumber);
+                    if (message != null) {
+                        ExtendedServiceBusMessage extendedMessage = processReceivedMessage(message);
+                        extendedMessages.add(extendedMessage);
+                    } else {
+                        logger.warn("No deferred message found with sequence number: {}", sequenceNumber);
+                    }
+                } catch (Exception e) {
+                    logger.error("Failed to receive deferred message with sequence number {}: {}", 
+                               sequenceNumber, e.getMessage());
+                }
+            }
+            
+            logger.debug("Received and processed {} deferred messages", extendedMessages.size());
+            return extendedMessages;
+        } catch (Exception e) {
+            logger.error("Failed to receive deferred messages", e);
+            throw new RuntimeException("Failed to receive deferred messages", e);
         }
     }
 
