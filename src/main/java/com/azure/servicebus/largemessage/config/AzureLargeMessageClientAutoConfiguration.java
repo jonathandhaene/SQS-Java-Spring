@@ -1,9 +1,11 @@
 package com.azure.servicebus.largemessage.config;
 
 import com.azure.servicebus.largemessage.client.AzureServiceBusLargeMessageClient;
+import com.azure.servicebus.largemessage.store.BlobNameResolver;
 import com.azure.servicebus.largemessage.store.BlobPayloadStore;
 import com.azure.storage.blob.BlobServiceClient;
 import com.azure.storage.blob.BlobServiceClientBuilder;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -77,13 +79,19 @@ public class AzureLargeMessageClientAutoConfiguration {
     @ConditionalOnMissingBean
     public AzureServiceBusLargeMessageClient azureServiceBusLargeMessageClient(
             LargeMessageClientConfiguration config,
-            org.springframework.beans.factory.ObjectProvider<BlobPayloadStore> payloadStoreProvider) {
+            org.springframework.beans.factory.ObjectProvider<BlobPayloadStore> payloadStoreProvider,
+            @Autowired(required = false) BlobNameResolver customBlobNameResolver) {
         
         if (serviceBusConnectionString == null || serviceBusConnectionString.isEmpty()) {
             throw new IllegalStateException(
                 "Azure Service Bus connection string is required. " +
                 "Please set azure.servicebus.connection-string property or AZURE_SERVICEBUS_CONNECTION_STRING environment variable."
             );
+        }
+
+        // Set custom blob name resolver if provided
+        if (customBlobNameResolver != null) {
+            config.setBlobNameResolver(customBlobNameResolver);
         }
 
         // Get BlobPayloadStore if available (will be null in receive-only mode)

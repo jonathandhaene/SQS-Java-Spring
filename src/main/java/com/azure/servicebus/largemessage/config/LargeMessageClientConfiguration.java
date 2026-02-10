@@ -1,5 +1,7 @@
 package com.azure.servicebus.largemessage.config;
 
+import com.azure.servicebus.largemessage.store.BlobNameResolver;
+import com.azure.servicebus.largemessage.store.DefaultBlobNameResolver;
 import com.azure.servicebus.largemessage.util.BlobKeyPrefixValidator;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
@@ -89,6 +91,9 @@ public class LargeMessageClientConfiguration {
     
     // Encryption (nested configuration)
     private EncryptionConfiguration encryption = new EncryptionConfiguration();
+    
+    // Custom resolvers (transient - not serializable from YAML)
+    private transient BlobNameResolver blobNameResolver;
 
     /**
      * Gets the message size threshold in bytes.
@@ -415,5 +420,22 @@ public class LargeMessageClientConfiguration {
 
     public void setMessagePropertyForBlobSasUri(String messagePropertyForBlobSasUri) {
         this.messagePropertyForBlobSasUri = messagePropertyForBlobSasUri;
+    }
+
+    /**
+     * Gets the blob name resolver.
+     * Returns the default resolver if none is set.
+     *
+     * @return the blob name resolver
+     */
+    public BlobNameResolver getBlobNameResolver() {
+        if (blobNameResolver == null) {
+            blobNameResolver = new DefaultBlobNameResolver(blobKeyPrefix);
+        }
+        return blobNameResolver;
+    }
+
+    public void setBlobNameResolver(BlobNameResolver blobNameResolver) {
+        this.blobNameResolver = blobNameResolver;
     }
 }

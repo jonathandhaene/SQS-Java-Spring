@@ -159,8 +159,14 @@ public class AzureServiceBusLargeMessageClient implements AutoCloseable {
                 if (shouldOffload) {
                     logger.debug("Message size {} exceeds threshold or alwaysThroughBlob=true. Offloading to blob storage.", payloadSize);
                     
-                    // Generate unique blob name
-                    String blobName = config.getBlobKeyPrefix() + UUID.randomUUID().toString();
+                    // Create message object for blob name resolution
+                    ServiceBusMessage tempMessage = new ServiceBusMessage(messageBody);
+                    if (sessionId != null && !sessionId.isEmpty()) {
+                        tempMessage.setSessionId(sessionId);
+                    }
+                    
+                    // Generate blob name using configured resolver
+                    String blobName = config.getBlobNameResolver().resolve(tempMessage);
                     
                     // Store payload in blob with retry
                     BlobPointer pointer = retryHandler.executeWithRetry(() -> 
@@ -298,8 +304,11 @@ public class AzureServiceBusLargeMessageClient implements AutoCloseable {
                     if (shouldOffload) {
                         logger.debug("Batch message size {} exceeds threshold. Offloading to blob storage.", payloadSize);
                         
-                        // Generate unique blob name
-                        String blobName = config.getBlobKeyPrefix() + UUID.randomUUID().toString();
+                        // Create message object for blob name resolution
+                        ServiceBusMessage tempMessage = new ServiceBusMessage(messageBody);
+                        
+                        // Generate blob name using configured resolver
+                        String blobName = config.getBlobNameResolver().resolve(tempMessage);
                         
                         // Store payload in blob with retry
                         BlobPointer pointer = retryHandler.executeWithRetry(() -> 
@@ -432,7 +441,11 @@ public class AzureServiceBusLargeMessageClient implements AutoCloseable {
                 if (shouldOffload) {
                     logger.debug("Scheduled message size {} exceeds threshold. Offloading to blob storage.", payloadSize);
                     
-                    String blobName = config.getBlobKeyPrefix() + UUID.randomUUID().toString();
+                    // Create message object for blob name resolution
+                    ServiceBusMessage tempMessage = new ServiceBusMessage(messageBody);
+                    
+                    // Generate blob name using configured resolver
+                    String blobName = config.getBlobNameResolver().resolve(tempMessage);
                     BlobPointer pointer = retryHandler.executeWithRetry(() -> 
                         payloadStore.storePayload(blobName, messageBody)
                     );
