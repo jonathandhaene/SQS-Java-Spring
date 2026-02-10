@@ -67,6 +67,7 @@ public class LargeMessageClientConfiguration {
     private boolean payloadSupportEnabled = true;
     private boolean useLegacyReservedAttributeName = true;
     private boolean ignorePayloadNotFound = false;
+    private boolean receiveOnlyMode = false;
     
     // Validation
     private int maxAllowedProperties = MAX_ALLOWED_PROPERTIES;
@@ -283,6 +284,20 @@ public class LargeMessageClientConfiguration {
 
     public void setIgnorePayloadNotFound(boolean ignorePayloadNotFound) {
         this.ignorePayloadNotFound = ignorePayloadNotFound;
+    }
+
+    /**
+     * Indicates whether receive-only mode is enabled.
+     * In receive-only mode, messages can be received using SAS URIs without storage credentials.
+     *
+     * @return true if receive-only mode is enabled, false otherwise
+     */
+    public boolean isReceiveOnlyMode() {
+        return receiveOnlyMode;
+    }
+
+    public void setReceiveOnlyMode(boolean receiveOnlyMode) {
+        this.receiveOnlyMode = receiveOnlyMode;
     }
 
     /**

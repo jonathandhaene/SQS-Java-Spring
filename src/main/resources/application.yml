@@ -24,6 +24,9 @@ azure:
       sas-enabled: false                # Whether to generate SAS URIs for blob access
       sas-token-validation-time: P7D    # SAS token validity duration (ISO-8601 format, default: 7 days)
       message-property-for-blob-sas-uri: "$attachment.sas.uri"  # Message property name for SAS URI
+      
+      # Receive-only mode configuration
+      receive-only-mode: false          # Whether to enable receive-only mode (download via SAS URI without storage credentials)
   storage:
     connection-string: ${AZURE_STORAGE_CONNECTION_STRING}
     container-name: ${AZURE_STORAGE_CONTAINER_NAME:large-messages}
