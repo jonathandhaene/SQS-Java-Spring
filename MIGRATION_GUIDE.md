@@ -28,66 +28,95 @@ Update your configuration settings based on the following:
 - **AWS SQS** allows offloading large payloads using Amazon S3. 
 - **Azure Service Bus** supports similar features using Azure Blob Storage, which can be implemented with the following code:
   ```java
-  // Example for Azure Blob
   BlobClient blobClient = new BlobClientBuilder() 
       .connectionString(azureBlobConnectionString) 
       .containerName("yourContainer") 
-      .blobName("yourBlob") 
+      .blobName("yourBlobName") 
       .buildClient();
   blobClient.upload(new ByteArrayInputStream(messageBytes), messageBytes.length);
   ```
 
 ### 2. Retries
-- AWS SQS has built-in retry policies which can be configured via visibility timeouts.
-- Azure Service Bus uses a different mechanism:
-  - Implement retry policies through message handlers and middleware.
+- AWS SQS has built-in retry policies with configurable visibility timeouts.
+- Azure Service Bus retries can be configured programmatically or via the SDK options:
   ```java
-  // Example retry mechanism
-  receiveMessages();
+  ServiceBusClientBuilder clientBuilder = new ServiceBusClientBuilder()
+      .connectionString(azureServiceBusConnectionString)
+      .retryOptions(new AmqpRetryOptions()
+          .setMaxRetries(3)
+          .setMode(AmqpRetryMode.EXPONENTIAL)
+          .setMaxDelay(Duration.ofSeconds(30))
+      );
   ``` 
 
 ### 3. Error Handling
-- Handling errors in SQS involves simply using dead letter queues.
-- In Azure Service Bus, you can configure dead letter messages, and you may also need to handle them explicitly:
+- Handling errors in **AWS SQS** involves interacting with Dead Letter Queues (DLQs).
+- In **Azure Service Bus**, DLQs are built-in and can be used seamlessly. Example:
   ```java
-  // Example of handling dead letter messages
-  serviceBusReceiver.receiveMessages().thenAccept(receivedMessage -> {
-      // Process message
-  });
+  ServiceBusProcessorClient processor = new ServiceBusClientBuilder()
+      .processor()
+      .connectionString(azureServiceBusConnectionString)
+      .queueName("my-queue")
+      .processMessage(context -> {
+          System.out.println("Processing message: " + context.getMessage().getBody().toString());
+      })
+      .processError(context -> {
+          System.err.println("Error occurred: " + context.getException());
+      })
+      .buildProcessorClient();
+  processor.start();
   ```
 
 ## Java Code Examples
 ### Example of Sending a Message
-**AWS SQS**:  
+**AWS SQS**:
 ```java
-SendMessageRequest send_msg_request = SendMessageRequest.builder()
+SendMessageRequest sendMsgRequest = SendMessageRequest.builder()
     .queueUrl(queueUrl)
-    .messageBody(message)
+    .messageBody("Sample message")
     .build();
-SendMessageResponse send_msg_response = sqsClient.sendMessage(send_msg_request);
-```
-
-**Azure Service Bus**:  
-```java
-Sender sender = client.createSender(queueName);
-Sender.sendMessage(new ServiceBusMessage(message));
-```
-
-### Example of Receiving a Message
-**AWS SQS**:  
-```java
-ReceiveMessageRequest receiveRequest = ReceiveMessageRequest.builder()
-    .queueUrl(queueUrl)
-    .build();
-List<Message> messages = sqsClient.receiveMessage(receiveRequest).messages();
+SendMessageResponse response = sqsClient.sendMessage(sendMsgRequest);
+System.out.println("Message ID: " + response.messageId());
 ```
 
 **Azure Service Bus**:
 ```java
-Receiver receiver = client.createReceiver(queueName);
-Receiver.receiveMessages().forEach(message -> {
-    // Process the message
-});
+ServiceBusSenderClient senderClient = new ServiceBusClientBuilder()
+    .connectionString(azureServiceBusConnectionString)
+    .sender()
+    .queueName("queue-name")
+    .buildClient();
+
+senderClient.sendMessage(new ServiceBusMessage("Sample message"));
+System.out.println("Message sent successfully.");
+```
+
+### Example of Receiving Messages
+**AWS SQS**:
+```java
+ReceiveMessageRequest receiveRequest = ReceiveMessageRequest.builder()
+    .queueUrl(queueUrl)
+    .maxNumberOfMessages(10)
+    .build();
+List<Message> messages = sqsClient.receiveMessage(receiveRequest).messages();
+for (Message message : messages) {
+    System.out.println("Message: " + message.body());
+}
+```
+
+**Azure Service Bus**:
+```java
+ServiceBusReceiverClient receiverClient = new ServiceBusClientBuilder()
+    .connectionString(azureServiceBusConnectionString)
+    .receiver()
+    .queueName("queue-name")
+    .buildClient();
+
+IterableStream<ServiceBusReceivedMessage> messages = receiverClient.receiveMessages(10);
+for (ServiceBusReceivedMessage message : messages) {
+    System.out.println("Message: " + message.getBody().toString());
+    receiverClient.complete(message);
+}
 ```
 
 ## Conclusion
