@@ -5,6 +5,7 @@ import com.azure.servicebus.extended.config.ExtendedClientConfiguration;
 import com.azure.servicebus.extended.model.BlobPointer;
 import com.azure.servicebus.extended.model.ExtendedServiceBusMessage;
 import com.azure.servicebus.extended.store.BlobPayloadStore;
+import com.azure.servicebus.extended.util.ApplicationPropertyValidator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -12,6 +13,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.*;
 import java.util.function.Consumer;
+import java.util.stream.Collectors;
 
 /**
  * Azure Service Bus Extended Client - the core client that implements the extended client pattern.
@@ -96,12 +98,32 @@ public class AzureServiceBusExtendedClient implements AutoCloseable {
      */
     public void sendMessage(String messageBody, Map<String, Object> applicationProperties) {
         try {
+            // If payload support is disabled, send directly without blob interaction
+            if (!config.isPayloadSupportEnabled()) {
+                logger.debug("Payload support disabled. Sending message directly.");
+                ServiceBusMessage message = new ServiceBusMessage(messageBody);
+                for (Map.Entry<String, Object> entry : applicationProperties.entrySet()) {
+                    message.getApplicationProperties().put(entry.getKey(), entry.getValue());
+                }
+                senderClient.sendMessage(message);
+                return;
+            }
+            
             int payloadSize = messageBody.getBytes(StandardCharsets.UTF_8).length;
             boolean shouldOffload = config.isAlwaysThroughBlob() || 
                                    payloadSize > config.getMessageSizeThreshold();
 
             ServiceBusMessage message;
             Map<String, Object> properties = new HashMap<>(applicationProperties);
+            
+            // Validate application properties before sending
+            Set<String> reservedNames = new HashSet<>(Arrays.asList(
+                ExtendedClientConfiguration.RESERVED_ATTRIBUTE_NAME,
+                ExtendedClientConfiguration.LEGACY_RESERVED_ATTRIBUTE_NAME,
+                ExtendedClientConfiguration.BLOB_POINTER_MARKER,
+                ExtendedClientConfiguration.EXTENDED_CLIENT_USER_AGENT
+            ));
+            ApplicationPropertyValidator.validate(properties, reservedNames, config.getMaxAllowedProperties());
 
             if (shouldOffload) {
                 logger.debug("Message size {} exceeds threshold or alwaysThroughBlob=true. Offloading to blob storage.", payloadSize);
@@ -115,8 +137,9 @@ public class AzureServiceBusExtendedClient implements AutoCloseable {
                 // Create message with blob pointer as body
                 message = new ServiceBusMessage(pointer.toJson());
                 
-                // Add metadata properties
-                properties.put(ExtendedClientConfiguration.RESERVED_ATTRIBUTE_NAME, payloadSize);
+                // Add metadata properties using configured attribute name
+                String attributeName = config.getReservedAttributeName();
+                properties.put(attributeName, payloadSize);
                 properties.put(ExtendedClientConfiguration.BLOB_POINTER_MARKER, "true");
                 
                 logger.debug("Payload offloaded to blob: {}", pointer);
@@ -124,6 +147,10 @@ public class AzureServiceBusExtendedClient implements AutoCloseable {
                 logger.debug("Message size {} is within threshold. Sending directly.", payloadSize);
                 message = new ServiceBusMessage(messageBody);
             }
+
+            // Add user-agent tracking
+            properties.put(ExtendedClientConfiguration.EXTENDED_CLIENT_USER_AGENT, 
+                          "AzureServiceBusExtendedClient/1.0.0-SNAPSHOT");
 
             // Set application properties
             for (Map.Entry<String, Object> entry : properties.entrySet()) {
@@ -147,6 +174,123 @@ public class AzureServiceBusExtendedClient implements AutoCloseable {
         for (String body : messageBodies) {
             sendMessage(body);
         }
+    }
+
+    /**
+     * Sends multiple messages in a true batch with per-message offloading evaluation.
+     * This is the Azure equivalent of AWS's sendMessageBatch with per-message threshold checking.
+     *
+     * @param messageBodies list of message bodies to send
+     */
+    public void sendMessageBatch(List<String> messageBodies) {
+        sendMessageBatch(messageBodies, new HashMap<>());
+    }
+
+    /**
+     * Sends multiple messages in a true batch with per-message offloading evaluation.
+     * Each message is evaluated individually for blob offloading based on size threshold.
+     *
+     * @param messageBodies list of message bodies to send
+     * @param commonProperties application properties to apply to all messages
+     */
+    public void sendMessageBatch(List<String> messageBodies, Map<String, Object> commonProperties) {
+        try {
+            logger.debug("Sending message batch of {} messages", messageBodies.size());
+            
+            ServiceBusMessageBatch messageBatch = senderClient.createMessageBatch();
+            
+            for (String messageBody : messageBodies) {
+                ServiceBusMessage message = prepareMessage(messageBody, commonProperties);
+                
+                // Try to add message to batch
+                if (!messageBatch.tryAddMessage(message)) {
+                    // Batch is full, send it and create a new one
+                    logger.debug("Batch full, sending {} messages", messageBatch.getCount());
+                    senderClient.sendMessages(messageBatch);
+                    
+                    messageBatch = senderClient.createMessageBatch();
+                    if (!messageBatch.tryAddMessage(message)) {
+                        // Message too large even for empty batch
+                        logger.warn("Message too large for batch, sending individually");
+                        senderClient.sendMessage(message);
+                    }
+                }
+            }
+            
+            // Send remaining messages in batch
+            if (messageBatch.getCount() > 0) {
+                logger.debug("Sending final batch of {} messages", messageBatch.getCount());
+                senderClient.sendMessages(messageBatch);
+            }
+            
+            logger.debug("Message batch sent successfully");
+        } catch (Exception e) {
+            logger.error("Failed to send message batch", e);
+            throw new RuntimeException("Failed to send message batch", e);
+        }
+    }
+
+    /**
+     * Prepares a message for sending, applying blob offloading logic if needed.
+     *
+     * @param messageBody the message body
+     * @param applicationProperties application properties to add
+     * @return the prepared ServiceBusMessage
+     */
+    private ServiceBusMessage prepareMessage(String messageBody, Map<String, Object> applicationProperties) {
+        // If payload support is disabled, send directly
+        if (!config.isPayloadSupportEnabled()) {
+            ServiceBusMessage message = new ServiceBusMessage(messageBody);
+            for (Map.Entry<String, Object> entry : applicationProperties.entrySet()) {
+                message.getApplicationProperties().put(entry.getKey(), entry.getValue());
+            }
+            return message;
+        }
+        
+        int payloadSize = messageBody.getBytes(StandardCharsets.UTF_8).length;
+        boolean shouldOffload = config.isAlwaysThroughBlob() || 
+                               payloadSize > config.getMessageSizeThreshold();
+
+        ServiceBusMessage message;
+        Map<String, Object> properties = new HashMap<>(applicationProperties);
+        
+        // Validate application properties
+        Set<String> reservedNames = new HashSet<>(Arrays.asList(
+            ExtendedClientConfiguration.RESERVED_ATTRIBUTE_NAME,
+            ExtendedClientConfiguration.LEGACY_RESERVED_ATTRIBUTE_NAME,
+            ExtendedClientConfiguration.BLOB_POINTER_MARKER,
+            ExtendedClientConfiguration.EXTENDED_CLIENT_USER_AGENT
+        ));
+        ApplicationPropertyValidator.validate(properties, reservedNames, config.getMaxAllowedProperties());
+
+        if (shouldOffload) {
+            // Generate unique blob name
+            String blobName = config.getBlobKeyPrefix() + UUID.randomUUID().toString();
+            
+            // Store payload in blob
+            BlobPointer pointer = payloadStore.storePayload(blobName, messageBody);
+            
+            // Create message with blob pointer as body
+            message = new ServiceBusMessage(pointer.toJson());
+            
+            // Add metadata properties
+            String attributeName = config.getReservedAttributeName();
+            properties.put(attributeName, payloadSize);
+            properties.put(ExtendedClientConfiguration.BLOB_POINTER_MARKER, "true");
+        } else {
+            message = new ServiceBusMessage(messageBody);
+        }
+
+        // Add user-agent tracking
+        properties.put(ExtendedClientConfiguration.EXTENDED_CLIENT_USER_AGENT, 
+                      "AzureServiceBusExtendedClient/1.0.0-SNAPSHOT");
+
+        // Set application properties
+        for (Map.Entry<String, Object> entry : properties.entrySet()) {
+            message.getApplicationProperties().put(entry.getKey(), entry.getValue());
+        }
+
+        return message;
     }
 
     /**
@@ -235,6 +379,8 @@ public class AzureServiceBusExtendedClient implements AutoCloseable {
      */
     private ExtendedServiceBusMessage processReceivedMessage(ServiceBusReceivedMessage message) {
         Map<String, Object> appProperties = new HashMap<>(message.getApplicationProperties());
+        
+        // Check for blob pointer marker
         boolean isFromBlob = "true".equals(String.valueOf(appProperties.get(ExtendedClientConfiguration.BLOB_POINTER_MARKER)));
         
         String body = message.getBody().toString();
@@ -246,9 +392,18 @@ public class AzureServiceBusExtendedClient implements AutoCloseable {
                 blobPointer = BlobPointer.fromJson(body);
                 body = payloadStore.getPayload(blobPointer);
                 
+                // Handle case where blob is not found and ignorePayloadNotFound is true
+                if (body == null && config.isIgnorePayloadNotFound()) {
+                    logger.warn("Blob payload not found for message {}, returning empty body", message.getMessageId());
+                    body = "";
+                }
+                
                 // Remove internal marker properties
                 appProperties.remove(ExtendedClientConfiguration.BLOB_POINTER_MARKER);
+                
+                // Remove both modern and legacy reserved attribute names
                 appProperties.remove(ExtendedClientConfiguration.RESERVED_ATTRIBUTE_NAME);
+                appProperties.remove(ExtendedClientConfiguration.LEGACY_RESERVED_ATTRIBUTE_NAME);
                 
                 logger.debug("Payload resolved from blob: {}", blobPointer);
             } catch (Exception e) {
@@ -256,6 +411,9 @@ public class AzureServiceBusExtendedClient implements AutoCloseable {
                 throw new RuntimeException("Failed to resolve blob payload", e);
             }
         }
+        
+        // Strip user-agent property
+        appProperties.remove(ExtendedClientConfiguration.EXTENDED_CLIENT_USER_AGENT);
 
         return new ExtendedServiceBusMessage(
                 message.getMessageId(),
@@ -295,6 +453,89 @@ public class AzureServiceBusExtendedClient implements AutoCloseable {
             logger.error("Failed to delete blob payload", e);
             // Don't throw exception - cleanup failure shouldn't break message processing
         }
+    }
+
+    /**
+     * Deletes blob payloads for a batch of messages.
+     * This is the Azure equivalent of AWS's deleteMessageBatch.
+     * Handles per-message errors gracefully - one failure won't stop others.
+     *
+     * @param messages list of extended Service Bus messages
+     */
+    public void deletePayloadBatch(List<ExtendedServiceBusMessage> messages) {
+        if (!config.isCleanupBlobOnDelete()) {
+            logger.debug("Blob cleanup is disabled. Skipping deletion.");
+            return;
+        }
+
+        logger.debug("Deleting blob payloads for batch of {} messages", messages.size());
+        int successCount = 0;
+        int skipCount = 0;
+        int failCount = 0;
+
+        for (ExtendedServiceBusMessage message : messages) {
+            try {
+                if (!message.isPayloadFromBlob() || message.getBlobPointer() == null) {
+                    skipCount++;
+                    continue;
+                }
+
+                payloadStore.deletePayload(message.getBlobPointer());
+                successCount++;
+            } catch (Exception e) {
+                logger.error("Failed to delete blob payload for message {}: {}", 
+                           message.getMessageId(), e.getMessage());
+                failCount++;
+                // Continue with other messages
+            }
+        }
+
+        logger.info("Batch delete completed: {} succeeded, {} skipped, {} failed", 
+                   successCount, skipCount, failCount);
+    }
+
+    /**
+     * Renews the lock on a message.
+     * This is the Azure equivalent of AWS's changeMessageVisibility.
+     *
+     * @param message the received message to renew lock for
+     */
+    public void renewMessageLock(ServiceBusReceivedMessage message) {
+        try {
+            logger.debug("Renewing message lock for message: {}", message.getMessageId());
+            receiverClient.renewMessageLock(message);
+            logger.debug("Message lock renewed successfully");
+        } catch (Exception e) {
+            logger.error("Failed to renew message lock for message {}", message.getMessageId(), e);
+            throw new RuntimeException("Failed to renew message lock", e);
+        }
+    }
+
+    /**
+     * Renews locks for a batch of messages.
+     * This is the Azure equivalent of AWS's changeMessageVisibilityBatch.
+     *
+     * @param messages list of received messages to renew locks for
+     */
+    public void renewMessageLockBatch(List<ServiceBusReceivedMessage> messages) {
+        logger.debug("Renewing message locks for batch of {} messages", messages.size());
+        int successCount = 0;
+        int failCount = 0;
+
+        for (ServiceBusReceivedMessage message : messages) {
+            try {
+                receiverClient.renewMessageLock(message);
+                successCount++;
+            } catch (Exception e) {
+                logger.error("Failed to renew message lock for message {}: {}", 
+                           message.getMessageId(), e.getMessage());
+                failCount++;
+                // Continue with other messages
+            }
+        }
+
+        logger.info("Batch lock renewal completed: {} succeeded, {} failed", 
+                   successCount, failCount);
     }
 
     /**
