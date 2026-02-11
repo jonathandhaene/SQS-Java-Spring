@@ -8,7 +8,7 @@ The git history cleaning process has been **successfully executed locally** and 
 
 1. ✅ Created orphan branch with no parent history
 2. ✅ Staged all 65 repository files
-3. ✅ Created single "Initial commit" (commit hash will vary based on timestamp)
+3. ✅ Created single "Initial commit" (commit hash varies based on timestamp and author metadata)
 4. ✅ Verified exactly 1 commit exists
 5. ✅ Renamed branch to `copilot/remove-git-history`
 

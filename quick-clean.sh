@@ -45,15 +45,27 @@ echo -e "${GREEN}Starting cleanup...${NC}"
 
 # Create orphan branch
 echo "→ Creating orphan branch..."
-git checkout --orphan temp-clean-history-$$ >/dev/null 2>&1
+if ! git checkout --orphan temp-clean-history-$$ 2>&1 | grep -v "Switched to"; then
+    echo -e "${RED}❌ Failed to create orphan branch${NC}"
+    exit 1
+fi
 
 # Stage all files
 echo "→ Staging all files..."
-git add -A >/dev/null 2>&1
+if ! git add -A 2>&1; then
+    echo -e "${RED}❌ Failed to stage files${NC}"
+    exit 1
+fi
 
 # Create initial commit
 echo "→ Creating initial commit..."
-git commit -m "Initial commit" >/dev/null 2>&1
+if ! git commit -m "Initial commit" 2>&1 | grep -v "create mode"; then
+    echo -e "${RED}❌ Failed to create commit${NC}"
+    echo "Tip: Ensure git user.name and user.email are configured:"
+    echo "  git config user.name \"Your Name\""
+    echo "  git config user.email \"your@email.com\""
+    exit 1
+fi
 
 # Verify single commit
 COMMIT_COUNT=$(git rev-list --count HEAD)
