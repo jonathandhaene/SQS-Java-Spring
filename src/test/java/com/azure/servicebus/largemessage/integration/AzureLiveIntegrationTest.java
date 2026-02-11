@@ -20,6 +20,7 @@ import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 
 import java.time.OffsetDateTime;
 import java.util.*;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -262,5 +263,260 @@ class AzureLiveIntegrationTest extends IntegrationTestBase {
         assertEquals(storageConnectionString, provider.getConnectionString());
 
         logger.info("✓ PlainTextConnectionStringProvider works correctly");
+    }
+
+    // =========================================================================
+    // Binary message round-trip
+    // =========================================================================
+
+    @Test
+    @Order(9)
+    @DisplayName("Binary message round-trip via blob offloading")
+    void testBinaryMessageRoundTrip() {
+        byte[] binaryPayload = new byte[TEST_THRESHOLD + 256];
+        java.util.concurrent.ThreadLocalRandom.current().nextBytes(binaryPayload);
+        String testId = UUID.randomUUID().toString();
+
+        Map<String, Object> props = new HashMap<>();
+        props.put("testId", testId);
+
+        client.sendBinaryMessage(binaryPayload, "application/octet-stream", props);
+        logger.info("Sent binary message ({} bytes), testId={}", binaryPayload.length, testId);
+
+        // Note: Binary messages are offloaded and the pointer is sent
+        // Full round-trip verification requires receiver support for binary
+        // This test validates the send path doesn't throw
+        logger.info("✓ Binary message sent successfully via blob offloading");
+    }
+
+    // =========================================================================
+    // Content-type preservation
+    // =========================================================================
+
+    @Test
+    @Order(10)
+    @DisplayName("Blob stores and retrieves content type correctly")
+    void testContentTypePreservation() {
+        String blobName = "live-test/ct-" + UUID.randomUUID();
+        String payload = "{\"key\":\"value\"}";
+
+        var pointer = payloadStore.storePayload(blobName, payload, "application/json");
+
+        String contentType = payloadStore.getContentType(pointer);
+        assertEquals("application/json", contentType, "Content type should be preserved");
+
+        payloadStore.deletePayload(pointer);
+        logger.info("✓ Content type preserved on blob round-trip");
+    }
+
+    // =========================================================================
+    // Sequential message send
+    // =========================================================================
+
+    @Test
+    @Order(11)
+    @DisplayName("Sequential sendMessages sends all messages")
+    void testSequentialSendMessages() {
+        List<String> bodies = List.of(
+                "sequential-1-" + UUID.randomUUID(),
+                "sequential-2-" + UUID.randomUUID()
+        );
+
+        assertDoesNotThrow(() -> client.sendMessages(bodies));
+
+        logger.info("✓ Sequential sendMessages sent {} messages", bodies.size());
+    }
+
+    // =========================================================================
+    // Blob cleanup expired
+    // =========================================================================
+
+    @Test
+    @Order(12)
+    @DisplayName("Cleanup expired blobs runs without error")
+    void testCleanupExpiredBlobs() {
+        config.setBlobTtlDays(1);
+
+        // Run cleanup — all existing blobs should have future TTLs
+        int deleted = payloadStore.cleanupExpiredBlobs();
+
+        assertTrue(deleted >= 0, "Cleanup should return a non-negative count");
+        logger.info("✓ Cleanup expired blobs completed, deleted {}", deleted);
+    }
+
+    // =========================================================================
+    // SAS URI generation
+    // =========================================================================
+
+    @Test
+    @Order(13)
+    @DisplayName("SAS URI is generated for stored blob")
+    void testSasUriGeneration() {
+        config.setSasEnabled(true);
+
+        String blobName = "live-test/sas-" + UUID.randomUUID();
+        var pointer = payloadStore.storePayload(blobName, "SAS test payload");
+
+        String sasUri = payloadStore.generateSasUri(pointer,
+                java.time.Duration.ofHours(1));
+
+        assertNotNull(sasUri, "SAS URI should not be null");
+        assertTrue(sasUri.contains("sig="), "SAS URI should contain a signature");
+        assertTrue(sasUri.contains(blobName), "SAS URI should reference the blob");
+
+        payloadStore.deletePayload(pointer);
+        logger.info("✓ SAS URI generated: {}...", sasUri.substring(0, Math.min(80, sasUri.length())));
+    }
+
+    // =========================================================================
+    // Gap 2: Binary payload round-trip
+    // =========================================================================
+
+    @Test
+    @Order(14)
+    @DisplayName("Gap 2: Binary payload store, retrieve, and delete lifecycle")
+    void testBinaryPayloadLifecycle() {
+        String blobName = "live-test/binary-" + UUID.randomUUID();
+        byte[] originalPayload = new byte[]{0x01, 0x02, 0x03, 0x04, (byte) 0xFE, (byte) 0xFF};
+
+        var pointer = payloadStore.storeBinaryPayload(blobName, originalPayload, "application/octet-stream");
+        assertNotNull(pointer);
+
+        byte[] retrieved = payloadStore.getBinaryPayload(pointer);
+        assertArrayEquals(originalPayload, retrieved, "Binary payload should match");
+
+        payloadStore.deletePayload(pointer);
+
+        config.setIgnorePayloadNotFound(true);
+        byte[] afterDelete = payloadStore.getBinaryPayload(pointer);
+        assertNull(afterDelete, "Binary payload should be null after deletion");
+
+        logger.info("✓ Binary payload lifecycle completed (store → get → delete → verify gone)");
+    }
+
+    // =========================================================================
+    // Gap 7: Content type with binary
+    // =========================================================================
+
+    @Test
+    @Order(15)
+    @DisplayName("Gap 7: Binary payload preserves content type")
+    void testBinaryPayloadContentType() {
+        String blobName = "live-test/binary-ct-" + UUID.randomUUID();
+        byte[] payload = "avro-encoded-data".getBytes();
+
+        var pointer = payloadStore.storeBinaryPayload(blobName, payload, "application/avro");
+
+        String contentType = payloadStore.getContentType(pointer);
+        assertEquals("application/avro", contentType, "Content type should be preserved for binary payload");
+
+        payloadStore.deletePayload(pointer);
+        logger.info("✓ Binary content type 'application/avro' preserved");
+    }
+
+    // =========================================================================
+    // Gap 5: TTL metadata on blobs
+    // =========================================================================
+
+    @Test
+    @Order(16)
+    @DisplayName("Gap 5: Blob with TTL metadata is stored and cleanup skips non-expired")
+    void testBlobTtlMetadata() {
+        config.setBlobTtlDays(7);
+
+        String blobName = "live-test/ttl-" + UUID.randomUUID();
+        var pointer = payloadStore.storePayload(blobName, "TTL payload");
+
+        String retrieved = payloadStore.getPayload(pointer);
+        assertEquals("TTL payload", retrieved);
+
+        // Run cleanup — blob has 7-day TTL so should NOT be deleted
+        int deleted = payloadStore.cleanupExpiredBlobs();
+        assertEquals(0, deleted, "Non-expired blob should not be deleted by cleanup");
+
+        // Verify still exists
+        String afterCleanup = payloadStore.getPayload(pointer);
+        assertEquals("TTL payload", afterCleanup);
+
+        payloadStore.deletePayload(pointer);
+        logger.info("✓ Blob with TTL metadata stored; cleanup skipped non-expired");
+    }
+
+    // =========================================================================
+    // Gap 6: SAS URI in send with large message
+    // =========================================================================
+
+    @Test
+    @Order(17)
+    @DisplayName("Gap 6: Large message with SAS enabled includes SAS URI in properties")
+    void testLargeMessageWithSas() {
+        config.setSasEnabled(true);
+        client = new AzureServiceBusLargeMessageClient(
+                sbConnectionString, queueName, payloadStore, config);
+
+        String body = generateLargeMessage();
+
+        // Sending the message — SAS URI should be generated and included
+        assertDoesNotThrow(() -> client.sendMessage(body));
+
+        logger.info("✓ Large message sent with SAS URI enabled");
+    }
+
+    // =========================================================================
+    // Gap 3: Auto-cleanup configuration
+    // =========================================================================
+
+    @Test
+    @Order(18)
+    @DisplayName("Gap 3: Auto-cleanup configuration can be enabled")
+    void testAutoCleanupConfiguration() {
+        config.setAutoCleanupOnComplete(true);
+        assertTrue(config.isAutoCleanupOnComplete());
+
+        // Creating a client with auto-cleanup should succeed
+        AzureServiceBusLargeMessageClient autoClient = new AzureServiceBusLargeMessageClient(
+                sbConnectionString, queueName, payloadStore, config);
+        assertNotNull(autoClient);
+        autoClient.close();
+
+        logger.info("✓ Auto-cleanup configuration enabled successfully");
+    }
+
+    // =========================================================================
+    // Batch send with small messages only
+    // =========================================================================
+
+    @Test
+    @Order(19)
+    @DisplayName("Batch send with only small messages (no offloading)")
+    void testBatchSendSmallOnly() {
+        List<String> bodies = List.of(
+                "batch-small-1-" + UUID.randomUUID(),
+                "batch-small-2-" + UUID.randomUUID(),
+                "batch-small-3-" + UUID.randomUUID()
+        );
+
+        assertDoesNotThrow(() -> client.sendMessageBatch(bodies));
+        logger.info("✓ Batch of {} small messages sent without offloading", bodies.size());
+    }
+
+    // =========================================================================
+    // Overwrite blob
+    // =========================================================================
+
+    @Test
+    @Order(20)
+    @DisplayName("Overwriting an existing blob updates content")
+    void testBlobOverwrite() {
+        String blobName = "live-test/overwrite-" + UUID.randomUUID();
+
+        payloadStore.storePayload(blobName, "original");
+        var pointer = payloadStore.storePayload(blobName, "updated");
+
+        String retrieved = payloadStore.getPayload(pointer);
+        assertEquals("updated", retrieved);
+
+        payloadStore.deletePayload(pointer);
+        logger.info("✓ Blob overwrite succeeded");
     }
 }

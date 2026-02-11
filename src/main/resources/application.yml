@@ -30,6 +30,21 @@ azure:
       
       # Receive-only mode configuration
       receive-only-mode: false          # Whether to enable receive-only mode (download via SAS URI without storage credentials)
+      
+      # Content-type metadata
+      default-content-type: "text/plain; charset=utf-8"  # Default MIME type for blob payloads
+      
+      # Auto-cleanup: delete blob payloads automatically on message completion (processor only)
+      auto-cleanup-on-complete: false   # Ties blob deletion to message completion in the processor
+      
+      # Scheduled TTL cleanup (0 = disabled)
+      ttl-cleanup-interval-minutes: 0   # Interval in minutes for automated expired-blob cleanup job
+      blob-ttl-days: 0                  # TTL in days for blob payloads (0 = disabled)
+      
+      # Encryption configuration
+      encryption:
+        encryption-scope: ""            # Azure Storage encryption scope name (optional)
+        customer-provided-key: ""       # Base64-encoded 256-bit AES key for CPK encryption (optional)
   storage:
     connection-string: ${AZURE_STORAGE_CONNECTION_STRING}
     container-name: ${AZURE_STORAGE_CONTAINER_NAME:large-messages}

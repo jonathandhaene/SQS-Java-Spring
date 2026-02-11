@@ -90,6 +90,96 @@ for (LargeServiceBusMessage message : messages) {
 }
 ```
 
+## Claim-Check Pattern Compliance
+
+This library implements the [Claim-Check pattern](https://learn.microsoft.com/en-us/azure/architecture/patterns/claim-check) for Azure Service Bus. The table below summarizes how each best practice is addressed and where gaps remain, so you can evaluate whether this solution fits your needs.
+
+### What's Covered
+
+| Principle | Status | Details |
+|-----------|--------|---------|
+| **Payload offloading** | ✅ | Large messages are stored in Azure Blob Storage; only a `BlobPointer` JSON reference is sent via Service Bus |
+| **External data store** | ✅ | `BlobPayloadStore` provides full CRUD operations against Azure Blob Storage with automatic container creation |
+| **Claim-check reference** | ✅ | `BlobPointer` (container name + blob name) is serialized as the Service Bus message body |
+| **Consumer retrieval** | ✅ | Receivers auto-detect the blob pointer marker, deserialize the reference, and download the payload transparently |
+| **Configurable threshold** | ✅ | Default 256 KB threshold; extensible via the `MessageSizeCriteria` interface; `alwaysThroughBlob` mode available |
+| **Sender/receiver transparency** | ✅ | Callers use `sendMessage(body)` / `receiveMessages()` — offloading and resolution are invisible |
+| **Security** | ✅ | SAS token generation, receive-only mode (credential-free), dynamic credential sourcing via `StorageConnectionStringProvider`, encryption scope support |
+| **Retries & error handling** | ✅ | Exponential backoff with jitter via `RetryHandler`; dead-letter queue support; graceful handling of missing blobs |
+| **Payload cleanup** | ✅ | Explicit `deletePayload()` and `deletePayloadBatch()` methods; TTL metadata; `cleanupExpiredBlobs()` helper |
+| **Transactional atomicity** | ✅ | Compensating transaction: if Service Bus send fails after a successful blob upload, the orphaned blob is automatically deleted. Full distributed transaction semantics remain unsupported. |
+| **Binary payload support** | ✅ | `sendBinaryMessage(byte[], contentType)` and `storeBinaryPayload()` / `getBinaryPayload()` support `byte[]`, Avro, Protobuf, and other binary formats with content-type metadata. |
+| **Automatic blob cleanup** | ✅ | `autoCleanupOnComplete` configuration option ties blob deletion to message completion inside the processor. Manual `deletePayload()` is still available for pull-based receivers. |
+| **Encryption** | ✅ | `EncryptionConfiguration.toSdkCustomerProvidedKey()` creates a real Azure SDK `CustomerProvidedKey` and applies it to blob uploads via `getCustomerProvidedKeyClient()`. Encryption scope is also properly applied. |
+| **TTL-based cleanup** | ✅ | `ScheduledBlobCleanupConfiguration` runs a `@Scheduled` job at a configurable interval (`ttl-cleanup-interval-minutes`). [Azure Blob Storage lifecycle policies](https://learn.microsoft.com/en-us/azure/storage/blobs/lifecycle-management-overview) remain the recommended production approach. |
+| **Batch send with SAS** | ✅ | `sendMessageBatch()` generates SAS URIs for each offloaded message, matching the behaviour of single `sendMessage()`. |
+| **Content-type metadata** | ✅ | Blobs store the original MIME content type both as an HTTP header (`Content-Type`) and in blob metadata (`contentType`). Receivers can retrieve it via `BlobPayloadStore.getContentType()`. |
+
+For more context on the pattern itself, see the [Azure Architecture — Claim-Check pattern](https://learn.microsoft.com/en-us/azure/architecture/patterns/claim-check).
+
+## Testing
+
+### Unit Tests
+
+Run unit tests (no Azure credentials required):
+
+```bash
+mvn test
+```
+
+The unit test suite covers all core classes:
+
+| Package | Class Under Test | Test Class |
+|---------|-----------------|------------|
+| `model` | `BlobPointer` | `BlobPointerTest` |
+| `model` | `LargeServiceBusMessage` | `LargeServiceBusMessageTest` |
+| `client` | `AzureServiceBusLargeMessageClient` | `AzureServiceBusLargeMessageClientTest` |
+| `client` | Extended features (atomicity, binary, batch SAS) | `GapImplementationClientTest` |
+| `config` | `LargeMessageClientConfiguration` | `LargeMessageClientConfigurationTest` |
+| `config` | `DefaultMessageSizeCriteria` | `DefaultMessageSizeCriteriaTest` |
+| `config` | `EncryptionConfiguration` | `EncryptionConfigurationTest` |
+| `config` | Extended features (CPK, content-type, auto-cleanup, TTL) | `GapImplementationConfigTest` |
+| `config` | `PlainTextConnectionStringProvider` | `PlainTextConnectionStringProviderTest` |
+| `store` | `DefaultBlobNameResolver` | `DefaultBlobNameResolverTest` |
+| `store` | `DefaultMessageBodyReplacer` | `DefaultMessageBodyReplacerTest` |
+| `store` | `ReceiveOnlyBlobResolver` | `ReceiveOnlyBlobResolverTest` |
+| `store` | Extended features (binary store, CPK, content-type) | `GapImplementationStoreTest` |
+| `util` | `ApplicationPropertyValidator` | `ApplicationPropertyValidatorTest` |
+| `util` | `BlobKeyPrefixValidator` | `BlobKeyPrefixValidatorTest` |
+| `util` | `DuplicateDetectionHelper` | `DuplicateDetectionHelperTest` |
+| `util` | `RetryHandler` | `RetryHandlerTest` |
+| `util` | `SasTokenGenerator` | `SasTokenGeneratorTest` |
+
+### Integration Tests (Local — Mock-Based)
+
+Run local integration tests that use mocks and Azurite (no Azure credentials required):
+
+```bash
+mvn verify -P integration-test-local
+```
+
+### Integration Tests (Azure — Live)
+
+Run integration tests against live Azure resources (requires credentials):
+
+```bash
+export AZURE_SERVICEBUS_CONNECTION_STRING="..."
+export AZURE_STORAGE_CONNECTION_STRING="..."
+mvn verify -P integration-test-azure
+```
+
+## Project Structure
+
+```
+src/main/java/com/azure/servicebus/largemessage/
+├── client/        # Main client for sending/receiving large messages
+├── config/        # Spring Boot auto-configuration and settings
+├── example/       # Example Spring Boot application
+├── model/         # BlobPointer and LargeServiceBusMessage models
+├── store/         # Blob Storage operations and extensibility interfaces
+└── util/          # Validators, retry, tracing, and duplicate detection
+```
+
 ## Documentation
 
 For detailed usage examples, configuration options, and advanced features, see the [Migration Guide](MIGRATION_GUIDE.md).

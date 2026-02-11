@@ -250,4 +250,311 @@ class LocalAzuriteIntegrationTest extends IntegrationTestBase {
         payloadStore.deletePayload(pointer);
         logger.info("✓ Blob with TTL metadata stored and retrieved successfully");
     }
+
+    // =========================================================================
+    // Binary payload operations
+    // =========================================================================
+
+    @Test
+    @Order(11)
+    @DisplayName("Store and retrieve a binary payload")
+    void testBinaryPayloadStoreAndRetrieve() {
+        String blobName = "test/binary-" + UUID.randomUUID();
+        byte[] payload = new byte[] {0x01, 0x02, 0x03, 0x04, (byte) 0xFF};
+
+        BlobPointer pointer = payloadStore.storeBinaryPayload(blobName, payload, "application/octet-stream");
+        assertNotNull(pointer);
+        assertEquals(TEST_CONTAINER, pointer.getContainerName());
+
+        byte[] retrieved = payloadStore.getBinaryPayload(pointer);
+        assertArrayEquals(payload, retrieved);
+
+        payloadStore.deletePayload(pointer);
+        logger.info("✓ Binary payload store → retrieve → delete succeeded");
+    }
+
+    @Test
+    @Order(12)
+    @DisplayName("Store binary with Avro content type")
+    void testBinaryPayloadAvroContentType() {
+        String blobName = "test/avro-" + UUID.randomUUID();
+        byte[] avroPayload = "avro-encoded-data".getBytes();
+
+        BlobPointer pointer = payloadStore.storeBinaryPayload(blobName, avroPayload, "application/avro");
+        assertNotNull(pointer);
+
+        byte[] retrieved = payloadStore.getBinaryPayload(pointer);
+        assertArrayEquals(avroPayload, retrieved);
+
+        // Verify content type
+        String contentType = payloadStore.getContentType(pointer);
+        assertEquals("application/avro", contentType);
+
+        payloadStore.deletePayload(pointer);
+        logger.info("✓ Binary Avro payload stored with correct content type");
+    }
+
+    // =========================================================================
+    // Content-type operations
+    // =========================================================================
+
+    @Test
+    @Order(13)
+    @DisplayName("Content type is preserved in blob metadata")
+    void testContentTypePreserved() {
+        String blobName = "test/json-ct-" + UUID.randomUUID();
+        String payload = "{\"key\": \"value\"}";
+
+        BlobPointer pointer = payloadStore.storePayload(blobName, payload, "application/json");
+
+        String contentType = payloadStore.getContentType(pointer);
+        assertEquals("application/json", contentType);
+
+        payloadStore.deletePayload(pointer);
+        logger.info("✓ Content type application/json preserved");
+    }
+
+    @Test
+    @Order(14)
+    @DisplayName("Default content type is applied when none specified")
+    void testDefaultContentTypeApplied() {
+        config.setDefaultContentType("text/plain; charset=utf-8");
+        String blobName = "test/default-ct-" + UUID.randomUUID();
+
+        BlobPointer pointer = payloadStore.storePayload(blobName, "plain text");
+
+        String contentType = payloadStore.getContentType(pointer);
+        assertEquals("text/plain; charset=utf-8", contentType);
+
+        payloadStore.deletePayload(pointer);
+        logger.info("✓ Default content type applied when none specified");
+    }
+
+    // =========================================================================
+    // Cleanup expired blobs
+    // =========================================================================
+
+    @Test
+    @Order(15)
+    @DisplayName("Cleanup expired blobs removes expired entries")
+    void testCleanupExpiredBlobs() {
+        // Configure short TTL
+        config.setBlobTtlDays(0); // We'll manually set "expiresAt" in the past
+
+        // Store a blob with TTL
+        config.setBlobTtlDays(1);
+        String blobName = "test/cleanup-" + UUID.randomUUID();
+        BlobPointer pointer = payloadStore.storePayload(blobName, "cleanup payload");
+        assertNotNull(pointer);
+
+        // Run cleanup — the blob has TTL set to 1 day in the FUTURE, so should NOT be deleted
+        int deleted = payloadStore.cleanupExpiredBlobs();
+        assertEquals(0, deleted, "Non-expired blob should not be deleted");
+
+        // Verify blob still exists
+        String retrieved = payloadStore.getPayload(pointer);
+        assertEquals("cleanup payload", retrieved);
+
+        // Clean up manually
+        payloadStore.deletePayload(pointer);
+        logger.info("✓ Cleanup skipped non-expired blobs correctly");
+    }
+
+    @Test
+    @Order(16)
+    @DisplayName("Cleanup expired blobs returns 0 when no TTL configured")
+    void testCleanupNoTtlConfigured() {
+        config.setBlobTtlDays(0);
+        int deleted = payloadStore.cleanupExpiredBlobs();
+        assertEquals(0, deleted);
+        logger.info("✓ Cleanup returned 0 when no TTL configured");
+    }
+
+    // =========================================================================
+    // Delete idempotency
+    // =========================================================================
+
+    @Test
+    @Order(17)
+    @DisplayName("Double delete is idempotent (does not throw)")
+    void testDoubleDeleteIdempotent() {
+        String blobName = "test/double-del-" + UUID.randomUUID();
+        BlobPointer pointer = payloadStore.storePayload(blobName, "delete-me-twice");
+
+        payloadStore.deletePayload(pointer);
+        // Second delete should not throw
+        assertDoesNotThrow(() -> payloadStore.deletePayload(pointer));
+
+        logger.info("✓ Double delete is idempotent");
+    }
+
+    // =========================================================================
+    // getBinaryPayload — not found
+    // =========================================================================
+
+    @Test
+    @Order(18)
+    @DisplayName("getBinaryPayload returns null for missing blob when ignorePayloadNotFound")
+    void testGetBinaryPayloadNotFound() {
+        config.setIgnorePayloadNotFound(true);
+        BlobPointer pointer = new BlobPointer(TEST_CONTAINER, "binary-missing-" + UUID.randomUUID());
+
+        byte[] result = payloadStore.getBinaryPayload(pointer);
+        assertNull(result, "Should return null for missing binary blob");
+
+        logger.info("✓ getBinaryPayload returns null for missing blob with ignorePayloadNotFound=true");
+    }
+
+    // =========================================================================
+    // Content-type with store overloads
+    // =========================================================================
+
+    @Test
+    @Order(19)
+    @DisplayName("Store with explicit content type and retrieve it")
+    void testStoreWithContentTypeAndRetrieve() {
+        String blobName = "test/ct-explicit-" + UUID.randomUUID();
+        String payload = "<root><data>xml</data></root>";
+
+        BlobPointer pointer = payloadStore.storePayload(blobName, payload, "application/xml");
+
+        String contentType = payloadStore.getContentType(pointer);
+        assertEquals("application/xml", contentType);
+
+        String retrieved = payloadStore.getPayload(pointer);
+        assertEquals(payload, retrieved);
+
+        payloadStore.deletePayload(pointer);
+        logger.info("✓ Explicit content type application/xml stored and retrieved");
+    }
+
+    // =========================================================================
+    // Binary payload with various content types
+    // =========================================================================
+
+    @Test
+    @Order(20)
+    @DisplayName("Binary Protobuf payload with content type")
+    void testBinaryProtobufPayload() {
+        String blobName = "test/protobuf-" + UUID.randomUUID();
+        byte[] payload = new byte[]{0x08, (byte) 0x96, 0x01};
+
+        BlobPointer pointer = payloadStore.storeBinaryPayload(blobName, payload, "application/protobuf");
+
+        byte[] retrieved = payloadStore.getBinaryPayload(pointer);
+        assertArrayEquals(payload, retrieved);
+
+        String contentType = payloadStore.getContentType(pointer);
+        assertEquals("application/protobuf", contentType);
+
+        payloadStore.deletePayload(pointer);
+        logger.info("✓ Binary Protobuf payload stored with correct content type");
+    }
+
+    @Test
+    @Order(21)
+    @DisplayName("Binary payload with null content type defaults to octet-stream")
+    void testBinaryPayloadNullContentType() {
+        String blobName = "test/binary-null-ct-" + UUID.randomUUID();
+        byte[] payload = new byte[]{0x01, 0x02};
+
+        BlobPointer pointer = payloadStore.storeBinaryPayload(blobName, payload, null);
+
+        String contentType = payloadStore.getContentType(pointer);
+        assertEquals("application/octet-stream", contentType);
+
+        payloadStore.deletePayload(pointer);
+        logger.info("✓ Binary payload with null content type defaults to application/octet-stream");
+    }
+
+    // =========================================================================
+    // Large binary payload
+    // =========================================================================
+
+    @Test
+    @Order(22)
+    @DisplayName("Large binary payload round-trip")
+    void testLargeBinaryPayload() {
+        String blobName = "test/large-binary-" + UUID.randomUUID();
+        byte[] payload = new byte[4096]; // 4 KB
+        new java.util.Random(42).nextBytes(payload);
+
+        BlobPointer pointer = payloadStore.storeBinaryPayload(blobName, payload, "application/octet-stream");
+
+        byte[] retrieved = payloadStore.getBinaryPayload(pointer);
+        assertArrayEquals(payload, retrieved);
+        assertEquals(4096, retrieved.length);
+
+        payloadStore.deletePayload(pointer);
+        logger.info("✓ Large binary payload ({} bytes) round-trip succeeded", payload.length);
+    }
+
+    // =========================================================================
+    // SAS URI generation
+    // =========================================================================
+
+    @Test
+    @Order(23)
+    @DisplayName("SAS URI generated for stored blob")
+    void testSasUriGeneration() {
+        String blobName = "test/sas-" + UUID.randomUUID();
+        BlobPointer pointer = payloadStore.storePayload(blobName, "SAS payload");
+
+        String sasUri = payloadStore.generateSasUri(pointer, java.time.Duration.ofHours(1));
+
+        assertNotNull(sasUri);
+        assertTrue(sasUri.contains("sig="), "SAS URI should contain signature");
+
+        payloadStore.deletePayload(pointer);
+        logger.info("✓ SAS URI generated: {}...", sasUri.substring(0, Math.min(80, sasUri.length())));
+    }
+
+    // =========================================================================
+    // Blob key prefix with binary payloads
+    // =========================================================================
+
+    @Test
+    @Order(24)
+    @DisplayName("Blob key prefix applied to binary payload names")
+    void testBlobKeyPrefixWithBinaryPayload() {
+        config.setBlobKeyPrefix("binary-test/");
+        String blobName = config.getBlobKeyPrefix() + UUID.randomUUID();
+
+        byte[] payload = new byte[]{0x01, 0x02, 0x03};
+        BlobPointer pointer = payloadStore.storeBinaryPayload(blobName, payload, "application/octet-stream");
+
+        assertTrue(pointer.getBlobName().startsWith("binary-test/"));
+
+        byte[] retrieved = payloadStore.getBinaryPayload(pointer);
+        assertArrayEquals(payload, retrieved);
+
+        payloadStore.deletePayload(pointer);
+        logger.info("✓ Blob key prefix applied to binary payload: {}", pointer.getBlobName());
+    }
+
+    // =========================================================================
+    // Multiple content types on same container
+    // =========================================================================
+
+    @Test
+    @Order(25)
+    @DisplayName("Multiple blobs with different content types coexist")
+    void testMultipleContentTypes() {
+        String jsonBlob = "test/multi-json-" + UUID.randomUUID();
+        String xmlBlob = "test/multi-xml-" + UUID.randomUUID();
+        String binaryBlob = "test/multi-bin-" + UUID.randomUUID();
+
+        BlobPointer p1 = payloadStore.storePayload(jsonBlob, "{\"a\":1}", "application/json");
+        BlobPointer p2 = payloadStore.storePayload(xmlBlob, "<x/>", "application/xml");
+        BlobPointer p3 = payloadStore.storeBinaryPayload(binaryBlob, new byte[]{0x01}, "application/octet-stream");
+
+        assertEquals("application/json", payloadStore.getContentType(p1));
+        assertEquals("application/xml", payloadStore.getContentType(p2));
+        assertEquals("application/octet-stream", payloadStore.getContentType(p3));
+
+        payloadStore.deletePayload(p1);
+        payloadStore.deletePayload(p2);
+        payloadStore.deletePayload(p3);
+        logger.info("✓ Multiple blobs with different content types coexist correctly");
+    }
 }

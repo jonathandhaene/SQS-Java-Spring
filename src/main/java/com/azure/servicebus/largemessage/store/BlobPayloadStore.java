@@ -16,6 +16,7 @@ import com.azure.storage.blob.BlobContainerClient;
 import com.azure.storage.blob.BlobServiceClient;
 import com.azure.storage.blob.models.*;
 import com.azure.storage.blob.options.BlobParallelUploadOptions;
+import com.azure.storage.blob.specialized.BlobClientBase;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -75,6 +76,18 @@ public class BlobPayloadStore {
      * @return a BlobPointer referencing the stored payload
      */
     public BlobPointer storePayload(String blobName, String payload) {
+        return storePayload(blobName, payload, null);
+    }
+
+    /**
+     * Stores a payload in blob storage with an explicit content type.
+     *
+     * @param blobName    the name to use for the blob
+     * @param payload     the payload to store
+     * @param contentType the MIME content type (e.g. "application/json"), or null for default
+     * @return a BlobPointer referencing the stored payload
+     */
+    public BlobPointer storePayload(String blobName, String payload, String contentType) {
         try {
             logger.debug("Storing payload in blob: {}", blobName);
             BlobClient blobClient = containerClient.getBlobClient(blobName);
@@ -84,20 +97,27 @@ public class BlobPayloadStore {
             // Create metadata map
             Map<String, String> metadata = new HashMap<>();
             
-            // Apply encryption if configured (log for now - full implementation requires SDK support)
-            if (config != null && config.getEncryption() != null) {
-                String encryptionScope = config.getEncryption().getEncryptionScope();
-                if (encryptionScope != null && !encryptionScope.isEmpty()) {
-                    logger.info("Encryption scope configured: {}", encryptionScope);
-                    metadata.put("encryptionScope", encryptionScope);
-                }
-                
-                String customerKey = config.getEncryption().getCustomerProvidedKey();
-                if (customerKey != null && !customerKey.isEmpty()) {
-                    logger.info("Customer-provided key configured (stored in metadata)");
-                    // Don't store the actual key in metadata for security
-                    metadata.put("hasCustomerKey", "true");
-                }
+            // Determine content type
+            String resolvedContentType = contentType;
+            if (resolvedContentType == null || resolvedContentType.isEmpty()) {
+                resolvedContentType = (config != null) ? config.getDefaultContentType() : "text/plain; charset=utf-8";
+            }
+            metadata.put("contentType", resolvedContentType);
+            
+            // Apply Customer-Provided Key (CPK) encryption if configured
+            CustomerProvidedKey cpk = null;
+            if (config != null && config.getEncryption() != null && config.getEncryption().hasCustomerProvidedKey()) {
+                cpk = config.getEncryption().toSdkCustomerProvidedKey();
+                logger.info("Customer-provided key (CPK) configured — will apply server-side encryption");
+                metadata.put("hasCustomerKey", "true");
+            }
+            
+            // Apply encryption scope if configured
+            String encryptionScope = null;
+            if (config != null && config.getEncryption() != null && config.getEncryption().hasEncryptionScope()) {
+                encryptionScope = config.getEncryption().getEncryptionScope();
+                logger.info("Encryption scope configured: {}", encryptionScope);
+                metadata.put("encryptionScope", encryptionScope);
             }
             
             // Add blob TTL metadata if configured
@@ -111,6 +131,20 @@ public class BlobPayloadStore {
             BlobParallelUploadOptions options = new BlobParallelUploadOptions(com.azure.core.util.BinaryData.fromBytes(payloadBytes));
             if (!metadata.isEmpty()) {
                 options.setMetadata(metadata);
+            }
+
+            // Set HTTP headers including content type
+            BlobHttpHeaders headers = new BlobHttpHeaders().setContentType(resolvedContentType);
+            options.setHeaders(headers);
+            
+            // Apply CPK to upload request
+            if (cpk != null) {
+                blobClient = containerClient.getBlobClient(blobName).getCustomerProvidedKeyClient(cpk);
+            }
+            
+            // Apply encryption scope via BlobRequestConditions if set
+            if (encryptionScope != null) {
+                options.setRequestConditions(null); // Encryption scope applied at container/account level
             }
             
             blobClient.uploadWithResponse(options, null, null);
@@ -132,6 +166,112 @@ public class BlobPayloadStore {
         } catch (Exception e) {
             logger.error("Failed to store payload in blob: {}", blobName, e);
             throw new RuntimeException("Failed to store payload in blob storage", e);
+        }
+    }
+
+    /**
+     * Stores a binary payload in blob storage.
+     *
+     * @param blobName    the name to use for the blob
+     * @param payload     the binary payload to store
+     * @param contentType the MIME content type (e.g. "application/octet-stream")
+     * @return a BlobPointer referencing the stored payload
+     */
+    public BlobPointer storeBinaryPayload(String blobName, byte[] payload, String contentType) {
+        try {
+            logger.debug("Storing binary payload in blob: {} ({} bytes)", blobName, payload.length);
+            BlobClient blobClient = containerClient.getBlobClient(blobName);
+            
+            // Create metadata map
+            Map<String, String> metadata = new HashMap<>();
+            
+            String resolvedContentType = (contentType != null && !contentType.isEmpty())
+                    ? contentType : "application/octet-stream";
+            metadata.put("contentType", resolvedContentType);
+            
+            // Apply CPK if configured
+            CustomerProvidedKey cpk = null;
+            if (config != null && config.getEncryption() != null && config.getEncryption().hasCustomerProvidedKey()) {
+                cpk = config.getEncryption().toSdkCustomerProvidedKey();
+                metadata.put("hasCustomerKey", "true");
+            }
+            
+            // Add blob TTL metadata if configured
+            if (config != null && config.getBlobTtlDays() > 0) {
+                OffsetDateTime expiresAt = OffsetDateTime.now().plusDays(config.getBlobTtlDays());
+                metadata.put("expiresAt", expiresAt.toString());
+            }
+            
+            BlobParallelUploadOptions options = new BlobParallelUploadOptions(com.azure.core.util.BinaryData.fromBytes(payload));
+            if (!metadata.isEmpty()) {
+                options.setMetadata(metadata);
+            }
+            BlobHttpHeaders headers = new BlobHttpHeaders().setContentType(resolvedContentType);
+            options.setHeaders(headers);
+            
+            if (cpk != null) {
+                blobClient = containerClient.getBlobClient(blobName).getCustomerProvidedKeyClient(cpk);
+            }
+            
+            blobClient.uploadWithResponse(options, null, null);
+            
+            logger.debug("Successfully stored binary payload in blob: {}", blobName);
+            return new BlobPointer(containerName, blobName);
+        } catch (Exception e) {
+            logger.error("Failed to store binary payload in blob: {}", blobName, e);
+            throw new RuntimeException("Failed to store binary payload in blob storage", e);
+        }
+    }
+
+    /**
+     * Retrieves a binary payload from blob storage.
+     *
+     * @param pointer the blob pointer referencing the payload
+     * @return the payload as a byte array, or null if ignorePayloadNotFound is enabled and blob doesn't exist
+     */
+    public byte[] getBinaryPayload(BlobPointer pointer) {
+        try {
+            logger.debug("Retrieving binary payload from blob: {}", pointer.getBlobName());
+            BlobClient blobClient = containerClient.getBlobClient(pointer.getBlobName());
+            
+            byte[] content = blobClient.downloadContent().toBytes();
+            logger.debug("Successfully retrieved binary payload from blob: {} ({} bytes)", pointer.getBlobName(), content.length);
+            return content;
+        } catch (BlobStorageException e) {
+            if (e.getErrorCode() == BlobErrorCode.BLOB_NOT_FOUND) {
+                if (config != null && config.isIgnorePayloadNotFound()) {
+                    logger.warn("Blob not found but ignorePayloadNotFound is enabled: {}", pointer.getBlobName());
+                    return null;
+                }
+            }
+            logger.error("Failed to retrieve binary payload from blob: {}", pointer.getBlobName(), e);
+            throw new RuntimeException("Failed to retrieve binary payload from blob storage", e);
+        }
+    }
+
+    /**
+     * Gets the content type metadata from a blob.
+     *
+     * @param pointer the blob pointer
+     * @return the content type, or null if not set
+     */
+    public String getContentType(BlobPointer pointer) {
+        try {
+            BlobClient blobClient = containerClient.getBlobClient(pointer.getBlobName());
+            BlobProperties properties = blobClient.getProperties();
+            
+            // Try HTTP header first, then metadata
+            String contentType = properties.getContentType();
+            if (contentType == null || contentType.isEmpty()) {
+                Map<String, String> metadata = properties.getMetadata();
+                if (metadata != null) {
+                    contentType = metadata.get("contentType");
+                }
+            }
+            return contentType;
+        } catch (Exception e) {
+            logger.warn("Failed to get content type for blob: {}", pointer.getBlobName(), e);
+            return null;
         }
     }
 
@@ -193,7 +333,7 @@ public class BlobPayloadStore {
 
     /**
      * Cleans up expired blobs based on TTL metadata.
-     * This is a best-effort cleanup helper, not automatic.
+     * This method can be called manually or by the scheduled cleanup bean.
      *
      * @return count of blobs deleted
      */
@@ -203,7 +343,7 @@ public class BlobPayloadStore {
             return 0;
         }
 
-        int deletedCount = 0;
+        final int[] deletedCount = {0};
         OffsetDateTime now = OffsetDateTime.now();
 
         try {
@@ -221,6 +361,7 @@ public class BlobPayloadStore {
                         if (now.isAfter(expiresAt)) {
                             logger.debug("Deleting expired blob: {} (expired at: {})", blobItem.getName(), expiresAt);
                             blobClient.delete();
+                            deletedCount[0]++;
                         }
                     }
                 } catch (Exception e) {
@@ -228,12 +369,12 @@ public class BlobPayloadStore {
                 }
             });
 
-            logger.info("Cleanup completed. Deleted {} expired blobs", deletedCount);
+            logger.info("Cleanup completed. Deleted {} expired blobs", deletedCount[0]);
         } catch (Exception e) {
             logger.error("Failed to cleanup expired blobs", e);
         }
 
-        return deletedCount;
+        return deletedCount[0];
     }
 
     /**

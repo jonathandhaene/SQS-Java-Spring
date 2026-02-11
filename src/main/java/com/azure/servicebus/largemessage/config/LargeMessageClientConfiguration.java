@@ -101,6 +101,15 @@ public class LargeMessageClientConfiguration {
     
     // Encryption (nested configuration)
     private EncryptionConfiguration encryption = new EncryptionConfiguration();
+
+    // Content-type metadata for blob payloads
+    private String defaultContentType = "text/plain; charset=utf-8";
+
+    // Auto-cleanup: automatically delete blob payloads after message completion
+    private boolean autoCleanupOnComplete = false;
+
+    // Scheduled TTL cleanup interval in minutes (0 = disabled)
+    private long ttlCleanupIntervalMinutes = 0;
     
     // Custom resolvers and criteria (transient - not serializable from YAML)
     // These are runtime-injected beans that should not be persisted to configuration files
@@ -484,5 +493,46 @@ public class LargeMessageClientConfiguration {
 
     public void setMessageSizeCriteria(MessageSizeCriteria messageSizeCriteria) {
         this.messageSizeCriteria = messageSizeCriteria;
+    }
+
+    /**
+     * Gets the default content type to store in blob metadata.
+     *
+     * @return the default content type
+     */
+    public String getDefaultContentType() {
+        return defaultContentType;
+    }
+
+    public void setDefaultContentType(String defaultContentType) {
+        this.defaultContentType = defaultContentType;
+    }
+
+    /**
+     * Indicates whether blob payloads should be automatically deleted
+     * when messages are completed in the processor.
+     *
+     * @return true if auto-cleanup is enabled, false otherwise
+     */
+    public boolean isAutoCleanupOnComplete() {
+        return autoCleanupOnComplete;
+    }
+
+    public void setAutoCleanupOnComplete(boolean autoCleanupOnComplete) {
+        this.autoCleanupOnComplete = autoCleanupOnComplete;
+    }
+
+    /**
+     * Gets the interval in minutes for scheduled TTL cleanup of expired blobs.
+     * A value of 0 disables scheduled cleanup.
+     *
+     * @return the cleanup interval in minutes
+     */
+    public long getTtlCleanupIntervalMinutes() {
+        return ttlCleanupIntervalMinutes;
+    }
+
+    public void setTtlCleanupIntervalMinutes(long ttlCleanupIntervalMinutes) {
+        this.ttlCleanupIntervalMinutes = ttlCleanupIntervalMinutes;
     }
 }

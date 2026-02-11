@@ -405,4 +405,133 @@ class LocalConfigurationIntegrationTest extends IntegrationTestBase {
 
         logger.info("✓ All property types preserved correctly");
     }
+
+    // =========================================================================
+    // Gap 3: Auto-cleanup configuration
+    // =========================================================================
+
+    @Test
+    @Order(13)
+    @DisplayName("Auto-cleanup flag is passed through configuration")
+    void testAutoCleanupConfiguration() {
+        LargeMessageClientConfiguration config = createTestConfiguration();
+        config.setAutoCleanupOnComplete(true);
+
+        AzureServiceBusLargeMessageClient client = new AzureServiceBusLargeMessageClient(
+                mockSender, mockReceiver, mockPayloadStore, config);
+
+        assertTrue(config.isAutoCleanupOnComplete());
+        client.close();
+        logger.info("✓ Auto-cleanup flag configured and accessible");
+    }
+
+    // =========================================================================
+    // Gap 5: TTL cleanup interval
+    // =========================================================================
+
+    @Test
+    @Order(14)
+    @DisplayName("TTL cleanup interval defaults to 0 (disabled)")
+    void testTtlCleanupIntervalDefault() {
+        LargeMessageClientConfiguration config = new LargeMessageClientConfiguration();
+        assertEquals(0, config.getTtlCleanupIntervalMinutes());
+        logger.info("✓ TTL cleanup interval defaults to 0");
+    }
+
+    @Test
+    @Order(15)
+    @DisplayName("TTL cleanup interval can be set")
+    void testTtlCleanupIntervalConfigured() {
+        LargeMessageClientConfiguration config = createTestConfiguration();
+        config.setTtlCleanupIntervalMinutes(30);
+        assertEquals(30, config.getTtlCleanupIntervalMinutes());
+        logger.info("✓ TTL cleanup interval set to 30 minutes");
+    }
+
+    // =========================================================================
+    // Gap 7: Default content type
+    // =========================================================================
+
+    @Test
+    @Order(16)
+    @DisplayName("Default content type is applied from configuration")
+    void testDefaultContentTypeConfig() {
+        LargeMessageClientConfiguration config = createTestConfiguration();
+        assertEquals("text/plain; charset=utf-8", config.getDefaultContentType());
+
+        config.setDefaultContentType("application/json");
+        assertEquals("application/json", config.getDefaultContentType());
+        logger.info("✓ Default content type configurable");
+    }
+
+    // =========================================================================
+    // Gap 1: Transactional atomicity with config variants
+    // =========================================================================
+
+    @Test
+    @Order(17)
+    @DisplayName("Orphan blob cleanup when send fails with SAS enabled")
+    void testOrphanCleanupWithSas() {
+        LargeMessageClientConfiguration config = createTestConfiguration();
+        config.setSasEnabled(true);
+
+        BlobPointer pointer = new BlobPointer("c", "orphan-sas");
+        when(mockPayloadStore.storePayload(anyString(), anyString())).thenReturn(pointer);
+        when(mockPayloadStore.generateSasUri(any(), any())).thenReturn("https://fake-sas");
+        doThrow(new RuntimeException("send failed"))
+                .when(mockSender).sendMessage(any(ServiceBusMessage.class));
+
+        AzureServiceBusLargeMessageClient client = new AzureServiceBusLargeMessageClient(
+                mockSender, mockReceiver, mockPayloadStore, config);
+
+        assertThrows(RuntimeException.class, () -> client.sendMessage(generateLargeMessage()));
+
+        verify(mockPayloadStore, atLeastOnce()).deletePayload(pointer);
+        client.close();
+        logger.info("✓ Orphan blob cleaned up even when SAS was enabled");
+    }
+
+    // =========================================================================
+    // Gap 2: Binary message with alwaysThroughBlob
+    // =========================================================================
+
+    @Test
+    @Order(18)
+    @DisplayName("Binary message below threshold is sent directly (alwaysThroughBlob does not affect binary)")
+    void testBinaryMessageDirectSend() {
+        LargeMessageClientConfiguration config = createTestConfiguration();
+
+        AzureServiceBusLargeMessageClient client = new AzureServiceBusLargeMessageClient(
+                mockSender, mockReceiver, mockPayloadStore, config);
+
+        byte[] payload = "small binary".getBytes();
+        client.sendBinaryMessage(payload, "application/octet-stream");
+
+        verify(mockPayloadStore, never()).storeBinaryPayload(anyString(), any(), anyString());
+        verify(mockSender).sendMessage(any(ServiceBusMessage.class));
+        client.close();
+        logger.info("✓ Small binary message sent directly");
+    }
+
+    // =========================================================================
+    // Gap 4: Encryption configuration
+    // =========================================================================
+
+    @Test
+    @Order(19)
+    @DisplayName("Encryption configuration integrates with main config")
+    void testEncryptionConfigIntegration() {
+        LargeMessageClientConfiguration config = createTestConfiguration();
+        com.azure.servicebus.largemessage.config.EncryptionConfiguration enc =
+                new com.azure.servicebus.largemessage.config.EncryptionConfiguration();
+        enc.setCustomerProvidedKey("MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=");
+        enc.setEncryptionScope("test-scope");
+        config.setEncryption(enc);
+
+        assertNotNull(config.getEncryption());
+        assertTrue(config.getEncryption().hasCustomerProvidedKey());
+        assertTrue(config.getEncryption().hasEncryptionScope());
+        assertEquals("test-scope", config.getEncryption().getEncryptionScope());
+        logger.info("✓ Encryption configuration integrates with main config");
+    }
 }

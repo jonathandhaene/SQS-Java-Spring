@@ -165,6 +165,7 @@ public class AzureServiceBusLargeMessageClient implements AutoCloseable {
 
                 ServiceBusMessage message;
                 Map<String, Object> properties = new HashMap<>(applicationProperties);
+                BlobPointer pointer = null;
 
                 if (shouldOffload) {
                     int payloadSize = messageBody.getBytes(StandardCharsets.UTF_8).length;
@@ -180,7 +181,7 @@ public class AzureServiceBusLargeMessageClient implements AutoCloseable {
                     String blobName = config.getBlobNameResolver().resolve(tempMessage);
                     
                     // Store payload in blob with retry
-                    BlobPointer pointer = retryHandler.executeWithRetry(() -> 
+                    pointer = retryHandler.executeWithRetry(() -> 
                         payloadStore.storePayload(blobName, messageBody)
                     );
                     
@@ -237,8 +238,133 @@ public class AzureServiceBusLargeMessageClient implements AutoCloseable {
                     message.getApplicationProperties().put(entry.getKey(), entry.getValue());
                 }
 
-                senderClient.sendMessage(message);
-                logger.debug("Message sent successfully");
+                // Transactional atomicity: if sending fails after blob upload, clean up orphaned blob
+                try {
+                    senderClient.sendMessage(message);
+                    logger.debug("Message sent successfully");
+                } catch (Exception sendEx) {
+                    if (pointer != null) {
+                        logger.warn("Service Bus send failed after blob upload. Cleaning up orphaned blob: {}", pointer);
+                        try {
+                            payloadStore.deletePayload(pointer);
+                            logger.debug("Orphaned blob cleaned up successfully: {}", pointer);
+                        } catch (Exception cleanupEx) {
+                            logger.error("Failed to clean up orphaned blob: {}. Manual cleanup may be required.", pointer, cleanupEx);
+                        }
+                    }
+                    throw sendEx;
+                }
+            });
+
+            if (span != null) {
+                TracingHelper.endSpan(span);
+            }
+        } catch (Exception e) {
+            if (span != null) {
+                TracingHelper.recordException(span, e);
+                TracingHelper.endSpan(span);
+            }
+            throw e;
+        }
+    }
+
+    /**
+     * Sends a binary message with the large message client pattern.
+     * Supports byte[] payloads (e.g., Avro, Protobuf, or other binary formats).
+     *
+     * @param payload     the binary payload to send
+     * @param contentType the MIME content type (e.g., "application/octet-stream", "application/avro")
+     */
+    public void sendBinaryMessage(byte[] payload, String contentType) {
+        sendBinaryMessage(payload, contentType, new HashMap<>());
+    }
+
+    /**
+     * Sends a binary message with application properties.
+     *
+     * @param payload               the binary payload to send
+     * @param contentType           the MIME content type
+     * @param applicationProperties custom application properties
+     */
+    public void sendBinaryMessage(byte[] payload, String contentType, Map<String, Object> applicationProperties) {
+        Object span = null;
+        try {
+            if (config.isTracingEnabled() && TracingHelper.isAvailable()) {
+                span = TracingHelper.startSendSpan("ServiceBus.sendBinary");
+                TracingHelper.addAttribute(span, "messaging.system", "servicebus");
+            }
+
+            retryHandler.executeWithRetry(() -> {
+                ApplicationPropertyValidator.validate(applicationProperties, config.getMaxAllowedProperties());
+
+                boolean shouldOffload = config.isPayloadSupportEnabled() &&
+                        payload.length > config.getMessageSizeThreshold();
+
+                ServiceBusMessage message;
+                Map<String, Object> properties = new HashMap<>(applicationProperties);
+                BlobPointer pointer = null;
+
+                if (shouldOffload) {
+                    logger.debug("Binary message size {} meets offload criteria. Offloading to blob.", payload.length);
+
+                    ServiceBusMessage tempMessage = new ServiceBusMessage(com.azure.core.util.BinaryData.fromBytes(payload));
+                    String blobName = config.getBlobNameResolver().resolve(tempMessage);
+
+                    pointer = retryHandler.executeWithRetry(() ->
+                        payloadStore.storeBinaryPayload(blobName, payload, contentType)
+                    );
+
+                    if (config.isSasEnabled()) {
+                        try {
+                            String sasUri = payloadStore.generateSasUri(pointer, config.getSasTokenValidationTime());
+                            properties.put(config.getMessagePropertyForBlobSasUri(), sasUri);
+                        } catch (Exception e) {
+                            logger.error("Failed to generate SAS URI for binary message", e);
+                        }
+                    }
+
+                    String replacementBody = config.getBodyReplacer().replace("", pointer);
+                    message = new ServiceBusMessage(replacementBody);
+
+                    properties.put(config.getReservedAttributeName(), payload.length);
+                    properties.put(LargeMessageClientConfiguration.BLOB_POINTER_MARKER, "true");
+                    properties.put("contentType", contentType);
+                } else {
+                    message = new ServiceBusMessage(com.azure.core.util.BinaryData.fromBytes(payload));
+                    properties.put("contentType", contentType);
+                }
+
+                if (config.isEnableDuplicateDetectionId()) {
+                    String messageId = DuplicateDetectionHelper.computeContentHash(new String(payload, StandardCharsets.UTF_8));
+                    message.setMessageId(messageId);
+                }
+
+                properties.put(LargeMessageClientConfiguration.LARGE_MESSAGE_CLIENT_USER_AGENT,
+                              LargeMessageClientConfiguration.USER_AGENT_VALUE);
+
+                if (config.isTracingEnabled()) {
+                    TracingHelper.injectTraceContext(properties);
+                }
+
+                for (Map.Entry<String, Object> entry : properties.entrySet()) {
+                    message.getApplicationProperties().put(entry.getKey(), entry.getValue());
+                }
+
+                // Transactional atomicity: clean up orphaned blob on send failure
+                try {
+                    senderClient.sendMessage(message);
+                    logger.debug("Binary message sent successfully");
+                } catch (Exception sendEx) {
+                    if (pointer != null) {
+                        logger.warn("Service Bus send failed after blob upload. Cleaning up orphaned blob: {}", pointer);
+                        try {
+                            payloadStore.deletePayload(pointer);
+                        } catch (Exception cleanupEx) {
+                            logger.error("Failed to clean up orphaned blob: {}", pointer, cleanupEx);
+                        }
+                    }
+                    throw sendEx;
+                }
             });
 
             if (span != null) {
@@ -327,6 +453,17 @@ public class AzureServiceBusLargeMessageClient implements AutoCloseable {
                         BlobPointer pointer = retryHandler.executeWithRetry(() -> 
                             payloadStore.storePayload(blobName, messageBody)
                         );
+                        
+                        // Generate SAS URI if enabled (now supported in batch send)
+                        if (config.isSasEnabled()) {
+                            try {
+                                String sasUri = payloadStore.generateSasUri(pointer, config.getSasTokenValidationTime());
+                                properties.put(config.getMessagePropertyForBlobSasUri(), sasUri);
+                                logger.debug("Generated SAS URI for batch message");
+                            } catch (Exception e) {
+                                logger.error("Failed to generate SAS URI for batch message, proceeding without it", e);
+                            }
+                        }
                         
                         // Create message with blob pointer as body (using configured body replacer)
                         String replacementBody = config.getBodyReplacer().replace(messageBody, pointer);
@@ -585,6 +722,17 @@ public class AzureServiceBusLargeMessageClient implements AutoCloseable {
                         LargeServiceBusMessage largeMessage = processReceivedMessage(message);
                         messageHandler.accept(largeMessage);
                         context.complete();
+                        
+                        // Auto-cleanup: delete blob payload after successful completion
+                        if (config.isAutoCleanupOnComplete() && largeMessage.isPayloadFromBlob() 
+                                && largeMessage.getBlobPointer() != null && payloadStore != null) {
+                            try {
+                                payloadStore.deletePayload(largeMessage.getBlobPointer());
+                                logger.debug("Auto-cleanup: deleted blob payload for message {}", message.getMessageId());
+                            } catch (Exception cleanupEx) {
+                                logger.warn("Auto-cleanup failed for message {}: {}", message.getMessageId(), cleanupEx.getMessage());
+                            }
+                        }
                     } catch (Exception e) {
                         logger.error("Error processing message: {}", message.getMessageId(), e);
                         if (config.isDeadLetterOnFailure()) {

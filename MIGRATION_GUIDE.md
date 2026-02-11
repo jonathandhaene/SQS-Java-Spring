@@ -383,5 +383,72 @@ public class CustomMessageSizeCriteria implements MessageSizeCriteria {
 | `azure.servicebus.large-message-client.dead-letter-reason` | `"ProcessingFailure"` | Default dead-letter reason |
 | `azure.servicebus.large-message-client.max-delivery-count` | `10` | Informational only |
 
+## Utilities Reference
+
+### Application Property Validation
+
+`ApplicationPropertyValidator` enforces safe limits on custom message application properties:
+
+- Rejects reserved property names used internally by the library
+- Enforces a maximum count of user-defined properties (default: 9)
+- Limits total properties size to 64 KB
+
+```java
+Map<String, Object> props = Map.of("tenantId", "abc", "priority", "high");
+ApplicationPropertyValidator.validate(props, config.getMaxAllowedProperties());
+```
+
+### Blob Key Prefix Validation
+
+`BlobKeyPrefixValidator` validates blob key prefixes used for organizing payloads:
+
+- Maximum length: 988 characters
+- Allowed characters: alphanumeric, dots, underscores, slashes, and hyphens
+
+### Duplicate Detection
+
+`DuplicateDetectionHelper` computes SHA-256 content hashes for deduplication:
+
+```java
+String hash = DuplicateDetectionHelper.computeContentHash(messageBody);
+// Returns a Base64-encoded SHA-256 hash suitable for use as a deduplication ID
+```
+
+### Encryption Configuration
+
+`EncryptionConfiguration` provides encryption scope and customer-provided key support for blob uploads. See the [README](README.md) for full details.
+
+## Testing
+
+### Running Unit Tests
+
+```bash
+mvn test
+```
+
+### Running Local Integration Tests
+
+These tests use mocks and Azurite — no Azure credentials required:
+
+```bash
+mvn verify -P integration-test-local
+```
+
+### Running Azure Integration Tests
+
+Requires live Azure Service Bus and Storage credentials:
+
+```bash
+export AZURE_SERVICEBUS_CONNECTION_STRING="Endpoint=sb://..."
+export AZURE_STORAGE_CONNECTION_STRING="DefaultEndpointsProtocol=https;..."
+mvn verify -P integration-test-azure
+```
+
+### Running All Integration Tests
+
+```bash
+mvn verify -P integration-test
+```
+
 ## Conclusion
 This guide covers the key features and usage patterns of the Azure Service Bus Large Message Client. For more details, refer to the [README](README.md) and the example application in the repository.
