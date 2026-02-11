@@ -18,6 +18,15 @@ jobs:
     runs-on: ubuntu-latest
     # Only run if triggered directly or if the unit tests succeeded
     if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+
+    services:
+      azurite:
+        image: mcr.microsoft.com/azure-storage/azurite
+        ports:
+          - 10000:10000   # Blob service
+          - 10001:10001   # Queue service
+          - 10002:10002   # Table service
+
     steps:
       - uses: actions/checkout@v4
 
@@ -28,5 +37,14 @@ jobs:
           distribution: 'microsoft'
           cache: 'maven'
 
+      - name: Wait for Azurite to be ready
+        run: |
+          for i in $(seq 1 15); do
+            curl -sf http://localhost:10000/ > /dev/null 2>&1 && break || sleep 1
+          done
+
       - name: Run local integration tests
+        env:
+          AZURITE_ENABLED: 'true'
+          AZURE_STORAGE_CONNECTION_STRING: 'DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://localhost:10000/devstoreaccount1;'
         run: mvn clean verify -Pintegration-test-local --batch-mode --no-transfer-progress
