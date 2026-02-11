@@ -1,0 +1,39 @@
+name: Azure Integration Tests
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_run:
+    workflows: [ "Unit Tests" ]
+    types: [ completed ]
+
+permissions:
+  contents: read
+
+jobs:
+  azure-integration-tests:
+    name: Azure Live Integration Tests
+    runs-on: ubuntu-latest
+    # Only run if Azure credentials are configured and unit tests succeeded
+    if: |
+      vars.AZURE_INTEGRATION_TESTS_ENABLED == 'true' &&
+      (github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success')
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'microsoft'
+          cache: 'maven'
+
+      - name: Run Azure integration tests
+        env:
+          AZURE_SERVICEBUS_CONNECTION_STRING: ${{ secrets.AZURE_SERVICEBUS_CONNECTION_STRING }}
+          AZURE_STORAGE_CONNECTION_STRING: ${{ secrets.AZURE_STORAGE_CONNECTION_STRING }}
+          AZURE_SERVICEBUS_QUEUE_NAME: ${{ vars.AZURE_SERVICEBUS_QUEUE_NAME || 'integration-test-queue' }}
+          AZURE_STORAGE_CONTAINER_NAME: ${{ vars.AZURE_STORAGE_CONTAINER_NAME || 'integration-test' }}
+        run: mvn clean verify -Pintegration-test-azure --batch-mode --no-transfer-progress

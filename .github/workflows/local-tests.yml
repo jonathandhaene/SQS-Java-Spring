@@ -1,0 +1,32 @@
+name: Local Integration Tests
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_run:
+    workflows: [ "Unit Tests" ]
+    types: [ completed ]
+
+permissions:
+  contents: read
+
+jobs:
+  local-integration-tests:
+    name: Local Integration Tests
+    runs-on: ubuntu-latest
+    # Only run if triggered directly or if the unit tests succeeded
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'microsoft'
+          cache: 'maven'
+
+      - name: Run local integration tests
+        run: mvn clean verify -Pintegration-test-local --batch-mode --no-transfer-progress
