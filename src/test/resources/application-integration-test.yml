@@ -1,0 +1,19 @@
+# Integration test configuration
+# Used by integration tests — NOT for production use.
+
+azure:
+  servicebus:
+    large-message-client:
+      # Lower threshold so tests can easily trigger blob offloading
+      message-size-threshold: 1024
+      always-through-blob: false
+      cleanup-blob-on-delete: true
+      enable-tracing: false
+      enable-duplicate-detection-id: false
+      ignore-payload-not-found: true
+      blob-key-prefix: "integration-test/"
+
+      # Fast retries for tests
+      max-retries: 2
+      retry-delay-ms: 100
+      retry-max-delay-ms: 500

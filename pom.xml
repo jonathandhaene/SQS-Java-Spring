@@ -142,7 +142,99 @@
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
                 <version>3.0.0</version>
+                <configuration>
+                    <!-- Exclude integration tests from the default unit-test phase -->
+                    <excludes>
+                        <exclude>**/integration/**</exclude>
+                    </excludes>
+                </configuration>
             </plugin>
         </plugins>
     </build>
+
+    <profiles>
+        <!-- Run ALL integration tests (local + azure) -->
+        <profile>
+            <id>integration-test</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-failsafe-plugin</artifactId>
+                        <version>3.0.0</version>
+                        <configuration>
+                            <includes>
+                                <include>**/integration/**IT.java</include>
+                                <include>**/integration/**Test.java</include>
+                            </includes>
+                        </configuration>
+                        <executions>
+                            <execution>
+                                <goals>
+                                    <goal>integration-test</goal>
+                                    <goal>verify</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+
+        <!-- Run LOCAL-only integration tests (mock-based, no Azure creds required) -->
+        <profile>
+            <id>integration-test-local</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-failsafe-plugin</artifactId>
+                        <version>3.0.0</version>
+                        <configuration>
+                            <includes>
+                                <include>**/integration/Local*Test.java</include>
+                                <include>**/integration/Local*IT.java</include>
+                            </includes>
+                        </configuration>
+                        <executions>
+                            <execution>
+                                <goals>
+                                    <goal>integration-test</goal>
+                                    <goal>verify</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+
+        <!-- Run AZURE-only integration tests (requires live credentials) -->
+        <profile>
+            <id>integration-test-azure</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-failsafe-plugin</artifactId>
+                        <version>3.0.0</version>
+                        <configuration>
+                            <includes>
+                                <include>**/integration/Azure*Test.java</include>
+                                <include>**/integration/Azure*IT.java</include>
+                            </includes>
+                        </configuration>
+                        <executions>
+                            <execution>
+                                <goals>
+                                    <goal>integration-test</goal>
+                                    <goal>verify</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 </project>
