@@ -8,9 +8,7 @@
 
 package com.azure.servicebus.largemessage.client;
 
-import com.azure.core.util.BinaryData;
 import com.azure.messaging.servicebus.ServiceBusMessage;
-import com.azure.messaging.servicebus.ServiceBusReceivedMessage;
 import com.azure.messaging.servicebus.ServiceBusReceiverClient;
 import com.azure.messaging.servicebus.ServiceBusSenderClient;
 import com.azure.servicebus.largemessage.config.LargeMessageClientConfiguration;

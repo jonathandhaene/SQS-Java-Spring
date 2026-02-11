@@ -8,25 +8,15 @@
 
 package com.azure.servicebus.largemessage.store;
 
-import com.azure.storage.blob.BlobClient;
-import com.azure.storage.blob.models.BlobDownloadContentResponse;
-import com.azure.core.util.BinaryData;
 import org.junit.jupiter.api.Test;
-import org.mockito.MockedConstruction;
-
-import java.nio.charset.StandardCharsets;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.Mockito.*;
 
 class ReceiveOnlyBlobResolverTest {
 
     @Test
     void testGetPayloadBySasUri_Success() {
         // Arrange
-        String sasUri = "https://storage.blob.core.windows.net/container/blob?sv=2023-01-01&sig=abc123";
-        String expectedPayload = "Test payload content";
-        
         ReceiveOnlyBlobResolver resolver = new ReceiveOnlyBlobResolver();
         
         // We need to mock the BlobClient constructor and its behavior
