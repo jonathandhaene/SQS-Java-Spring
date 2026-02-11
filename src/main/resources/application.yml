@@ -1,3 +1,6 @@
+# DISCLAIMER: This configuration is for illustration and educational purposes only.
+# It is NOT production-ready. The author(s) accept NO responsibility for its use.
+
 azure:
   servicebus:
     connection-string: ${AZURE_SERVICEBUS_CONNECTION_STRING}

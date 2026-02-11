@@ -1,5 +1,12 @@
 # Azure Service Bus Large Message Client Guide
 
+> ⚠️ **DISCLAIMER: FOR ILLUSTRATION PURPOSES ONLY**
+> 
+> This project is a **proof-of-concept / illustrative example** and is **NOT production-ready code**.
+> It is provided "as is" without warranty of any kind. The author(s) accept **no responsibility or liability**
+> for any issues, damages, or consequences arising from the use of this software.
+> **Do not use this code in a production environment** without thorough review, testing, and modification.
+
 ## Introduction
 This guide provides instructions and examples for using the Azure Service Bus Large Message Client. It covers configuration, payload offloading to Azure Blob Storage, retries, error handling, and common usage patterns.
 

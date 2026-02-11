@@ -1,6 +1,13 @@
 # Azure Service Bus Large Message Client for Java Spring Boot
 
-A powerful Java Spring Boot library for handling large messages with Azure Service Bus. This library automatically offloads large message payloads to Azure Blob Storage when they exceed the configured threshold, providing a seamless experience for working with messages of any size.
+> ⚠️ **DISCLAIMER: FOR ILLUSTRATION PURPOSES ONLY**
+> 
+> This project is a **proof-of-concept / illustrative example** and is **NOT production-ready code**.
+> It is provided "as is" without warranty of any kind. The author(s) accept **no responsibility or liability**
+> for any issues, damages, or consequences arising from the use of this software.
+> **Do not use this code in a production environment** without thorough review, testing, and modification.
+
+An illustrative example library that demonstrates how to transparently offload large message payloads to Azure Blob Storage when they exceed the configured threshold, providing a seamless experience for working with messages of any size.
 
 ## Features
 
@@ -87,10 +94,25 @@ for (LargeServiceBusMessage message : messages) {
 
 For detailed usage examples, configuration options, and advanced features, see the [Migration Guide](MIGRATION_GUIDE.md).
 
-## License
-
-This project is licensed under the MIT License - see the LICENSE file for details.
-
 ## Contributing
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+This is an illustrative project. Contributions are welcome but please note that no guarantees 
+are made about maintenance or support. If you wish to use this in production, we recommend 
+forking and adapting it to your specific needs with proper testing and security review.
+
+## License & Disclaimer
+
+This project is licensed under the MIT License with an additional disclaimer — see the [LICENSE](LICENSE) file.
+
+**This code is for illustration purposes only and is not production-ready. The author(s) accept no responsibility for its use.**
+
+## Disclaimer
+
+> ⚠️ **THIS SOFTWARE IS PROVIDED FOR ILLUSTRATION AND EDUCATIONAL PURPOSES ONLY.**
+>
+> The author(s) of this project accept **NO responsibility or liability** for any issues, damages, 
+> data loss, security vulnerabilities, or other consequences arising from the use of this software.
+> This code is **NOT production-ready** and should **NOT** be used in any production environment 
+> without thorough review, testing, hardening, and modification.
+>
+> **USE ENTIRELY AT YOUR OWN RISK.**
