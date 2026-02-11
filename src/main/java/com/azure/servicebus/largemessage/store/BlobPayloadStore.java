@@ -19,13 +19,10 @@ import com.azure.storage.blob.options.BlobParallelUploadOptions;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.OffsetDateTime;
-import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 
 /**
@@ -83,7 +80,6 @@ public class BlobPayloadStore {
             BlobClient blobClient = containerClient.getBlobClient(blobName);
             
             byte[] payloadBytes = payload.getBytes(StandardCharsets.UTF_8);
-            ByteArrayInputStream inputStream = new ByteArrayInputStream(payloadBytes);
             
             // Create metadata map
             Map<String, String> metadata = new HashMap<>();
@@ -112,7 +108,7 @@ public class BlobPayloadStore {
             }
             
             // Create upload options
-            BlobParallelUploadOptions options = new BlobParallelUploadOptions(inputStream, payloadBytes.length);
+            BlobParallelUploadOptions options = new BlobParallelUploadOptions(com.azure.core.util.BinaryData.fromBytes(payloadBytes));
             if (!metadata.isEmpty()) {
                 options.setMetadata(metadata);
             }

@@ -9,11 +9,7 @@
 package com.azure.servicebus.largemessage.example;
 
 import com.azure.servicebus.largemessage.client.AzureServiceBusLargeMessageClient;
-import com.azure.servicebus.largemessage.config.LargeMessageClientConfiguration;
 import com.azure.servicebus.largemessage.model.LargeServiceBusMessage;
-import com.azure.servicebus.largemessage.store.BlobPayloadStore;
-import com.azure.storage.blob.BlobServiceClient;
-import com.azure.storage.blob.BlobServiceClientBuilder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.CommandLineRunner;

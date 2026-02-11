@@ -31,8 +31,8 @@ public class BlobKeyPrefixValidator {
 
         if (prefix.length() > MAX_PREFIX_LENGTH) {
             throw new IllegalArgumentException(
-                String.format("Blob key prefix exceeds maximum length of %d characters: %d", 
-                    MAX_PREFIX_LENGTH, prefix.length()));
+                    "Blob key prefix exceeds maximum length of %d characters: %d".formatted(
+                            MAX_PREFIX_LENGTH, prefix.length()));
         }
 
         if (!VALID_PREFIX_PATTERN.matcher(prefix).matches()) {

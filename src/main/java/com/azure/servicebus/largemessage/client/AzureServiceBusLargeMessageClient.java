@@ -28,7 +28,6 @@ import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.*;
 import java.util.function.Consumer;
-import java.util.stream.Collectors;
 
 /**
  * Core client for handling large messages with Azure Service Bus.
@@ -652,7 +651,6 @@ public class AzureServiceBusLargeMessageClient implements AutoCloseable {
                 if (sasUri != null && config.isReceiveOnlyMode()) {
                     // Use SAS URI for download (no storage credentials needed)
                     logger.debug("Receive-only mode: downloading payload using SAS URI");
-                    String blobPointerJson = body;
                     body = retryHandler.executeWithRetry(() -> receiveOnlyResolver.getPayloadBySasUri(sasUri));
                     
                     // Remove SAS URI property from application properties
@@ -660,7 +658,6 @@ public class AzureServiceBusLargeMessageClient implements AutoCloseable {
                 } else if (sasUri != null && payloadStore != null) {
                     // Prefer SAS URI if available, even with storage credentials
                     logger.debug("Downloading payload using SAS URI (SAS available)");
-                    String blobPointerJson = body;
                     body = retryHandler.executeWithRetry(() -> receiveOnlyResolver.getPayloadBySasUri(sasUri));
                     
                     // Remove SAS URI property from application properties

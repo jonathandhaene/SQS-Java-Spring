@@ -47,8 +47,8 @@ public class ApplicationPropertyValidator {
 
         if (userPropertyCount > maxAllowedProperties) {
             throw new IllegalArgumentException(
-                String.format("Application properties count (%d) exceeds maximum allowed (%d)", 
-                    userPropertyCount, maxAllowedProperties));
+                    "Application properties count (%d) exceeds maximum allowed (%d)".formatted(
+                            userPropertyCount, maxAllowedProperties));
         }
 
         // Check for reserved names in user properties
@@ -71,7 +71,7 @@ public class ApplicationPropertyValidator {
         // Conservative limit: 64KB for properties
         if (totalSize > 65536) {
             throw new IllegalArgumentException(
-                String.format("Total application properties size (%d bytes) exceeds safe limit (64KB)", totalSize));
+                    "Total application properties size (%d bytes) exceeds safe limit (64KB)".formatted(totalSize));
         }
     }
 
