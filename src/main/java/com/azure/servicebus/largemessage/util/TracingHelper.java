@@ -140,7 +140,7 @@ public class TracingHelper {
             
             if (traceId != null && !traceId.isEmpty()) {
                 // W3C Trace Context format
-                properties.put("traceparent", String.format("00-%s-%s-01", traceId, spanId));
+                properties.put("traceparent", "00-%s-%s-01".formatted(traceId, spanId));
             }
         } catch (Exception e) {
             logger.debug("Failed to inject trace context: {}", e.getMessage());
