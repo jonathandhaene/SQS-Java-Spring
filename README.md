@@ -1,7 +1,6 @@
 # Azure Service Bus Large Message Client for Java Spring Boot
 
-> ⚠️ **DISCLAIMER: FOR ILLUSTRATION PURPOSES ONLY**
-> 
+> [!WARNING]
 > This project is a **proof-of-concept / illustrative example** and is **NOT production-ready code**.
 > It is provided "as is" without warranty of any kind. The author(s) accept **no responsibility or liability**
 > for any issues, damages, or consequences arising from the use of this software.
@@ -198,8 +197,7 @@ This project is licensed under the MIT License with an additional disclaimer —
 
 ## Disclaimer
 
-> ⚠️ **THIS SOFTWARE IS PROVIDED FOR ILLUSTRATION AND EDUCATIONAL PURPOSES ONLY.**
->
+> [!WARNING]
 > The author(s) of this project accept **NO responsibility or liability** for any issues, damages, 
 > data loss, security vulnerabilities, or other consequences arising from the use of this software.
 > This code is **NOT production-ready** and should **NOT** be used in any production environment 
